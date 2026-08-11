@@ -1,0 +1,27 @@
+{
+  "objectIdFieldName": "OBJECTID",
+  "geometryType": "esriGeometryPolygon",
+  "spatialReference": {"wkid": 103122},
+  "features": [
+    {
+      "attributes": {
+        "OBJECTID": 12345,
+        "PID": "R05511-999-001-000",
+        "PIN": "3147-99-8441.000",
+        "MAPID": "3147-99-8441.000",
+        "ACRES": 0.5
+      },
+      "geometry": {
+        "rings": [
+          [
+            [2300000, 150000],
+            [2300100, 150000],
+            [2300100, 150100],
+            [2300000, 150100],
+            [2300000, 150000]
+          ]
+        ]
+      }
+    }
+  ]
+}

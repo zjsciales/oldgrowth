@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Canopy — Shortlisted Listings</title>
+<style>
+  :root {
+    --bg: #f6faf4;
+    --card-bg: #ffffff;
+    --accent: #2e7d32;
+    --accent-light: #e8f5e9;
+    --text: #1b2a1e;
+    --muted: #5c6b5f;
+    --border: #dcebd8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 16px 64px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  header { margin-bottom: 28px; }
+  h1 {
+    margin: 0 0 6px;
+    font-size: 1.6rem;
+    color: var(--accent);
+  }
+  .subtitle { color: var(--muted); font-size: 0.95rem; margin: 0; }
+  .stats {
+    display: flex;
+    gap: 16px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+  }
+  .stat {
+    background: var(--accent-light);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-size: 0.9rem;
+  }
+  .stat strong { display: block; font-size: 1.3rem; color: var(--accent); }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-left: 5px solid var(--accent);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin-bottom: 18px;
+    box-shadow: 0 1px 3px rgba(46, 125, 50, 0.08);
+  }
+  .card h2 {
+    margin: 0 0 4px;
+    font-size: 1.15rem;
+  }
+  .price {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .meta {
+    color: var(--muted);
+    font-size: 0.9rem;
+    margin: 4px 0 12px;
+  }
+  .rationale {
+    margin: 0 0 12px;
+    line-height: 1.5;
+  }
+  .badges { margin-bottom: 12px; }
+  .badge {
+    display: inline-block;
+    background: var(--accent-light);
+    color: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 3px 12px;
+    font-size: 0.78rem;
+    margin: 0 6px 6px 0;
+    font-weight: 600;
+  }
+  .links a {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 0.88rem;
+    margin-right: 16px;
+  }
+  .links a:hover { text-decoration: underline; }
+  .empty {
+    text-align: center;
+    color: var(--muted);
+    padding: 60px 20px;
+    background: var(--card-bg);
+    border-radius: 12px;
+    border: 1px dashed var(--border);
+  }
+  .flag-warning {
+    color: #b26a00;
+    font-size: 0.85rem;
+    margin: 0 0 10px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Canopy</h1>
+    <p class="subtitle">Wilmington lot scout — shortlisted candidates</p>
+    <div class="stats">
+      <div class="stat"><strong>{{ candidates|length }}</strong>shortlisted</div>
+      <div class="stat"><strong>{{ total_scored }}</strong>scored this run</div>
+    </div>
+  </header>
+
+  {% if candidates %}
+    {% for c in candidates %}
+    <div class="card">
+      <h2>{{ c.listing.formatted_address }}</h2>
+      <p class="meta">
+        <span class="price">{{ "${:,.0f}".format(c.listing.price) if c.listing.price else "price unknown" }}</span>
+        &middot; {{ c.listing.lot_size_sqft or "?" }} sqft lot
+        &middot; built {{ c.listing.year_built or "?" }}
+        &middot; {{ "%.0f"|format(c.score.canopy_pct) if c.score.canopy_pct is not none else "?" }}% canopy cover
+      </p>
+      <div class="badges">
+        {% if c.parcel and c.parcel.adjacent_water %}<span class="badge">Water adjacent</span>{% endif %}
+        {% if c.parcel and c.parcel.adjacent_park_or_conservation %}<span class="badge">Park / conservation adjacent</span>{% endif %}
+        {% if c.parcel and c.parcel.adjacent_county_or_city_owned %}<span class="badge">County/city adjacent</span>{% endif %}
+        {% if c.parcel and c.parcel.wetland_overlay %}<span class="badge">Wetland overlay</span>{% endif %}
+      </div>
+      {% if c.score.subagent_flag_ok is sameas false %}
+        <p class="flag-warning">⚠ Vision sanity-check flagged a concern with this candidate.</p>
+      {% endif %}
+      <p class="rationale">{{ c.score.subagent_rationale or "No rationale generated yet." }}</p>
+      <div class="links">
+        <a href="https://www.google.com/maps/@{{ c.listing.latitude }},{{ c.listing.longitude }},18z/data=!3m1!1e3" target="_blank">Satellite view</a>
+        <a href="https://tax.nhcgov.com/436/Records-Search" target="_blank">County records search{% if c.parcel and c.parcel.parcel_id %} (PID: {{ c.parcel.parcel_id }}){% endif %}</a>
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="empty">
+      <p>No listings have met the criteria yet. Run <code>python -m canopy.cli run-weekly</code> to scan for candidates.</p>
+    </div>
+  {% endif %}
+</div>
+</body>
+</html>
