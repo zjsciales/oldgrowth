@@ -1,4 +1,7 @@
-"""Stage 6: weekly digest email.
+"""Weekly digest email. Built from the preference model's digest plan
+(canopy/model.py::compute_digest_slots), not a rule-based filter's
+pass/fail list -- every section is ranked, never gated, per
+SCORING_MODEL.md §6's 70/20/10 top-ranked/uncertain/wildcard split.
 
 Note on links: RentCast's sale-listings response has no photo or public
 MLS-listing URL field (confirmed against their API docs), and per
@@ -17,24 +20,45 @@ from email.mime.text import MIMEText
 from sqlalchemy.orm import Session
 
 from canopy.config import DIGEST_TO_EMAIL, SMTP_HOST, SMTP_PASS, SMTP_PORT, SMTP_USER
-from canopy.db.models import DigestLog, Listing, Parcel, Score
+from canopy.db.models import DigestLog, Listing, ListingFeatures, Parcel, Score
 
 logger = logging.getLogger(__name__)
 
 NHC_RECORDS_SEARCH_URL = "https://tax.nhcgov.com/436/Records-Search"
 
+SECTION_TITLES = {
+    "top_ranked": "Top ranked",
+    "uncertain": "Still deciding -- rating these helps the model most",
+    "wildcard": "Wildcard",
+}
 
-def _candidate_html(listing: Listing, parcel: Parcel | None, score: Score) -> str:
+
+def _listing_row_html(session: Session, detail: dict) -> str:
+    listing_id = detail["listing_id"]
+    listing = session.get(Listing, listing_id)
+    if listing is None:
+        return ""
+    parcel = session.query(Parcel).filter_by(listing_id=listing_id).one_or_none()
+    features = (
+        session.query(ListingFeatures)
+        .filter_by(listing_id=listing_id)
+        .order_by(ListingFeatures.computed_at.desc())
+        .first()
+    )
+    score = session.query(Score).filter_by(listing_id=listing_id).one_or_none()
+
     maps_url = f"https://www.google.com/maps/@{listing.latitude},{listing.longitude},19z/data=!3m1!1e3"
     price = f"${listing.price:,.0f}" if listing.price else "price unknown"
     parcel_id = parcel.parcel_id if parcel else "unknown"
+    canopy_pct = features.parcel_canopy_pct if features else None
+    canopy_text = f"{canopy_pct:.0f}% canopy cover" if canopy_pct is not None else "canopy unknown"
+    rationale = (score.subagent_rationale if score else None) or ""
 
     return f"""
-    <div style="margin-bottom: 24px; padding-bottom: 24px; border-bottom: 1px solid #ddd;">
+    <div style="margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px solid #ddd;">
       <h3 style="margin: 0 0 4px;">{listing.formatted_address}</h3>
-      <p style="margin: 0 0 8px; color: #555;">{price} &middot; {listing.lot_size_sqft or "?"} sqft lot
-        &middot; built {listing.year_built or "?"} &middot; {score.canopy_pct:.0f}% canopy cover</p>
-      <p style="margin: 0 0 8px;">{score.subagent_rationale or ""}</p>
+      <p style="margin: 0 0 8px; color: #555;">{price} &middot; {canopy_text}</p>
+      <p style="margin: 0 0 8px;">{rationale}</p>
       <p style="margin: 0; font-size: 0.9em;">
         <a href="{maps_url}">Satellite view</a> &middot;
         <a href="{NHC_RECORDS_SEARCH_URL}">County records search</a> (PID: {parcel_id})
@@ -43,35 +67,74 @@ def _candidate_html(listing: Listing, parcel: Parcel | None, score: Score) -> st
     """
 
 
-def render_digest_html(candidates: list[tuple[Listing, Parcel | None, Score]]) -> str:
-    if not candidates:
-        return "<p>No new candidates matched this week's criteria.</p>"
-
-    body = "".join(_candidate_html(listing, parcel, score) for listing, parcel, score in candidates)
-    return f"""
-    <html><body style="font-family: sans-serif; max-width: 640px; margin: 0 auto;">
-      <h2>Canopy Weekly Digest</h2>
-      <p>{len(candidates)} new candidate{"s" if len(candidates) != 1 else ""} this week.</p>
-      {body}
-    </body></html>
-    """
+def _section_html(session: Session, title: str, details: list[dict]) -> str:
+    if not details:
+        return ""
+    rows = "".join(_listing_row_html(session, d) for d in details)
+    return f'<h2 style="margin-top: 32px;">{title}</h2>{rows}'
 
 
-def send_digest(session: Session, candidates: list[Listing], dry_run: bool = False) -> str:
-    """Builds and sends the digest for the given candidates. Returns the
-    rendered HTML (useful for dry-run inspection or the test digest)."""
-    rows = []
-    for listing in candidates:
-        parcel = session.query(Parcel).filter_by(listing_id=listing.id).one_or_none()
-        score = session.query(Score).filter_by(listing_id=listing.id).one_or_none()
-        if score is None:
-            continue
-        rows.append((listing, parcel, score))
+def _disagreement_section_html(session: Session, plan: dict) -> str:
+    if not plan["ready"]:
+        return (
+            '<h2 style="margin-top: 32px;">You two disagree about these</h2>'
+            '<p style="color: #555;">Still calibrating -- this section unlocks '
+            "once you've both rated a few dozen homes.</p>"
+        )
+    if not plan["disagreements"]:
+        return ""
+    rows = "".join(_listing_row_html(session, d) for d in plan["disagreements"])
+    return (
+        '<h2 style="margin-top: 32px;">You two disagree about these</h2>'
+        '<p style="color: #555;">The most productive conversations in this whole '
+        "process -- the model can't resolve a real difference in taste, only "
+        f"locate it.</p>{rows}"
+    )
 
-    html = render_digest_html(rows)
+
+def render_digest_html(session: Session, plan: dict) -> str:
+    if not plan["ready"]:
+        return (
+            '<html><body style="font-family: sans-serif; max-width: 640px; margin: 0 auto;">'
+            "<h2>Canopy Weekly Digest</h2>"
+            "<p>Still calibrating -- rate a few dozen homes each before the ranked "
+            "digest kicks in.</p>"
+            "</body></html>"
+        )
+
+    sections = "".join(
+        _section_html(session, SECTION_TITLES[key], plan[key])
+        for key in ("top_ranked", "uncertain", "wildcard")
+    )
+    sections += _disagreement_section_html(session, plan)
+
+    total = len(plan["top_ranked"]) + len(plan["uncertain"]) + len(plan["wildcard"])
+    return (
+        '<html><body style="font-family: sans-serif; max-width: 640px; margin: 0 auto;">'
+        "<h2>Canopy Weekly Digest</h2>"
+        f'<p>{total} listing{"s" if total != 1 else ""} this week.</p>'
+        f"{sections}"
+        "</body></html>"
+    )
+
+
+def send_digest(session: Session, plan: dict, dry_run: bool = False) -> str:
+    """Builds and sends the digest from a compute_digest_slots() plan.
+    Returns the rendered HTML (useful for dry-run inspection).
+
+    DigestLog is a plain audit log, not a suppression filter -- a listing
+    can legitimately resurface if its rank or uncertainty changes week to
+    week, which is correct for a ranking system even though re-sending
+    would have been wrong for the old fixed pass/fail filter."""
+    html = render_digest_html(session, plan)
+
+    listing_ids: list[str] = []
+    if plan["ready"]:
+        for key in ("top_ranked", "uncertain", "wildcard"):
+            listing_ids += [d["listing_id"] for d in plan[key]]
 
     if dry_run:
-        logger.info("dry-run: digest not sent, %d candidates", len(rows))
+        logger.info("dry-run: digest not sent, %d listings", len(listing_ids))
         return html
 
     msg = MIMEMultipart("alternative")
@@ -85,9 +148,9 @@ def send_digest(session: Session, candidates: list[Listing], dry_run: bool = Fal
         server.login(SMTP_USER, SMTP_PASS)
         server.sendmail(SMTP_USER, [DIGEST_TO_EMAIL], msg.as_string())
 
-    for listing, _, _ in rows:
-        session.add(DigestLog(listing_id=listing.id))
+    for listing_id in listing_ids:
+        session.add(DigestLog(listing_id=listing_id))
     session.commit()
 
-    logger.info("digest sent to %s: %d candidates", DIGEST_TO_EMAIL, len(rows))
+    logger.info("digest sent to %s: %d listings", DIGEST_TO_EMAIL, len(listing_ids))
     return html

@@ -21,6 +21,7 @@ import rasterio
 import rasterio.mask
 import requests
 from rasterio.warp import transform_geom
+from shapely.geometry import mapping, shape
 
 WCS_URL = "https://www.mrlc.gov/geoserver/mrlc_download/wcs"
 COVERAGE_ID = "mrlc_download__nlcd_tcc_conus_2021_v2021-4"
@@ -69,16 +70,23 @@ def ensure_canopy_raster(force: bool = False) -> Path:
     return CACHE_PATH
 
 
-def canopy_pct_for_geometry(geojson_geometry: dict, source_crs: str) -> float | None:
-    """Mean canopy % cover for a parcel polygon (given in any CRS -- it's
-    reprojected to match the raster). Returns None if the parcel doesn't
-    overlap any valid (non-water, non-background) raster pixels."""
+def _zonal_mean_pct(reprojected_geometry: dict) -> float | None:
     raster_path = ensure_canopy_raster()
-    reprojected = transform_geom(source_crs, RASTER_CRS, geojson_geometry)
-
     with rasterio.open(raster_path) as src:
         try:
-            clipped, _ = rasterio.mask.mask(src, [reprojected], crop=True)
+            # nodata=255 (this product's own background/no-data sentinel,
+            # not the GeoTIFF's registered nodata=0) is mandatory here --
+            # rasterio.mask fills pixels inside the crop bounding box but
+            # outside the actual polygon with `nodata`. Left at the
+            # default, those fill pixels come back as 0, which passes the
+            # (0-100) valid-canopy-% filter below and gets silently
+            # averaged in as real "0% canopy" data. For a non-rectangular
+            # parcel smaller than a few 30m NLCD pixels (true of most
+            # residential lots) this can be most of the "valid" pixel
+            # count -- confirmed live on a real parcel where fixing this
+            # changed 12.8% (10 of 12 pixels were bogus zero-fill) to the
+            # true 77% (2 real pixels).
+            clipped, _ = rasterio.mask.mask(src, [reprojected_geometry], crop=True, nodata=255)
         except ValueError:
             # geometry doesn't overlap the raster extent at all
             return None
@@ -88,3 +96,24 @@ def canopy_pct_for_geometry(geojson_geometry: dict, source_crs: str) -> float | 
     if valid.size == 0:
         return None
     return float(np.mean(valid))
+
+
+def canopy_pct_for_geometry(geojson_geometry: dict, source_crs: str) -> float | None:
+    """Mean canopy % cover for a parcel polygon (given in any CRS -- it's
+    reprojected to match the raster). Returns None if the parcel doesn't
+    overlap any valid (non-water, non-background) raster pixels."""
+    reprojected = transform_geom(source_crs, RASTER_CRS, geojson_geometry)
+    return _zonal_mean_pct(reprojected)
+
+
+def neighborhood_canopy_buffer_pct(
+    geojson_geometry: dict, source_crs: str, buffer_m: float = 150
+) -> float | None:
+    """Mean canopy % cover within `buffer_m` of the parcel -- distinct from
+    `canopy_pct_for_geometry`'s on-lot number. Buffering happens in the
+    raster's own CRS (meters) after reprojection, not in the source CRS,
+    so `buffer_m` means what it says regardless of whether the caller's
+    geometry is in feet (State Plane) or degrees."""
+    reprojected = transform_geom(source_crs, RASTER_CRS, geojson_geometry)
+    buffered = mapping(shape(reprojected).buffer(buffer_m))
+    return _zonal_mean_pct(buffered)

@@ -3,14 +3,15 @@
 import argparse
 import logging
 
-from canopy.db.models import Listing, Parcel, Score
+from canopy.db.models import Listing, ListingFeatures, Parcel, Rater
 from canopy.db.session import SessionLocal
 from canopy.digest import send_digest
 from canopy.enrich import enrich_listings
-from canopy.filter import filter_listings
+from canopy.features import FEATURE_SET_VERSION, compute_features_for_listings
 from canopy.ingest import ingest_all_zips
-from canopy.scoring import score_listings
-from canopy.subagent import run_subagent_on_candidates
+from canopy.model import compute_digest_slots, fit_model
+from canopy.model import score_listings as score_preferences
+from canopy.scoring import score_listings as score_canopy
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -28,6 +29,17 @@ def _unenriched_backlog(session) -> list[Listing]:
     return session.query(Listing).filter(~Listing.id.in_(enriched_ids)).all()
 
 
+def _unfeatured_backlog(session) -> list[Listing]:
+    """Same idea as _unenriched_backlog, one stage later: listings that
+    were enriched/scored but never got a feature vector computed for the
+    current FEATURE_SET_VERSION -- e.g. a crash mid-Stage-4."""
+    featured_ids = {
+        listing_id for (listing_id,) in
+        session.query(ListingFeatures.listing_id).filter(ListingFeatures.feature_set_version == FEATURE_SET_VERSION)
+    }
+    return session.query(Listing).filter(~Listing.id.in_(featured_ids)).all()
+
+
 def run_weekly(dry_run: bool = False) -> None:
     session = SessionLocal()
     try:
@@ -35,44 +47,71 @@ def run_weekly(dry_run: bool = False) -> None:
         changed = ingest_all_zips(session)
         logger.info("%d new/changed listings", len(changed))
 
-        backlog = _unenriched_backlog(session)
-        if backlog:
-            logger.info("%d listings from prior runs never finished enrichment, including them", len(backlog))
+        enrich_backlog = _unenriched_backlog(session)
+        # checked upfront, before any stage runs -- a listing stuck only
+        # at Stage 4 (already enriched, never featured) has nothing in
+        # `changed` or `enrich_backlog` to keep it from being missed by
+        # the early-exit check below
+        feature_backlog = _unfeatured_backlog(session)
 
-        to_process = list({listing.id: listing for listing in [*changed, *backlog]}.values())
-        if not to_process:
+        if not changed and not enrich_backlog and not feature_backlog:
             logger.info("nothing new this week, exiting")
             return
 
+        if enrich_backlog:
+            logger.info("%d listings from prior runs never finished enrichment, including them", len(enrich_backlog))
+        to_enrich = list({listing.id: listing for listing in [*changed, *enrich_backlog]}.values())
+
         logger.info("=== Stage 2: GIS enrichment ===")
-        enrich_listings(session, to_process)
+        enrich_listings(session, to_enrich)
 
         logger.info("=== Stage 3: canopy scoring ===")
-        score_listings(session, to_process)
+        score_canopy(session, to_enrich)
 
-        logger.info("=== Stage 4: rule-based filter ===")
-        candidates = filter_listings(session, to_process)
-        logger.info("%d candidates passed the filter", len(candidates))
-        if not candidates:
-            logger.info("no candidates this week, exiting")
-            return
+        logger.info("=== Stage 4: feature vectors ===")
+        if feature_backlog:
+            logger.info("%d listings never got a feature vector, including them", len(feature_backlog))
+        to_feature = list({listing.id: listing for listing in [*to_enrich, *feature_backlog]}.values())
+        compute_features_for_listings(session, to_feature)
 
-        logger.info("=== Stage 5: Claude sub-agent ===")
-        already_evaluated_ids = {
-            score.listing_id for score in session.query(Score).filter(Score.subagent_rationale.isnot(None))
-        }
-        unevaluated_candidates = [c for c in candidates if c.id not in already_evaluated_ids]
-        if len(unevaluated_candidates) < len(candidates):
-            logger.info(
-                "%d candidates already evaluated by a prior run, skipping",
-                len(candidates) - len(unevaluated_candidates),
+        raters = session.query(Rater).order_by(Rater.id).all()
+        if len(raters) != 2:
+            logger.warning(
+                "expected exactly 2 raters for joint scoring, found %d -- skipping model refit/digest",
+                len(raters),
             )
-        run_subagent_on_candidates(session, unevaluated_candidates)
+            return
+        rater_a, rater_b = raters[0].id, raters[1].id
+
+        logger.info("=== Stage 5: refit preference models (%s, %s) ===", rater_a, rater_b)
+        for rater_id in (rater_a, rater_b):
+            model_run = fit_model(session, rater_id)
+            score_preferences(session, model_run)
+            logger.info("%s: n_pairs=%d holdout_accuracy=%s", rater_id, model_run.n_pairs, model_run.holdout_accuracy)
 
         logger.info("=== Stage 6: digest ===")
-        html = send_digest(session, candidates, dry_run=dry_run)
+        plan = compute_digest_slots(session, rater_a, rater_b)
+        html = send_digest(session, plan, dry_run=dry_run)
         if dry_run:
             logger.info("dry-run digest HTML:\n%s", html)
+    finally:
+        session.close()
+
+
+def compute_features() -> None:
+    """Standalone Stage 4 (features) runner, independent of run_weekly --
+    handy for backfilling without spending RentCast/GIS calls on ingest."""
+    session = SessionLocal()
+    try:
+        already_done = {
+            listing_id for (listing_id,) in
+            session.query(ListingFeatures.listing_id)
+            .filter(ListingFeatures.feature_set_version == FEATURE_SET_VERSION)
+        }
+        listings = session.query(Listing).filter(~Listing.id.in_(already_done)).all()
+        logger.info("computing features for %d listings (%d already done)", len(listings), len(already_done))
+        compute_features_for_listings(session, listings)
+        logger.info("done")
     finally:
         session.close()
 
@@ -86,10 +125,13 @@ def main() -> None:
         "--dry-run", action="store_true",
         help="Run the full pipeline but skip sending the email (logs the digest instead)",
     )
+    subparsers.add_parser("compute-features", help="Run Stage 4 (feature vectors) standalone")
 
     args = parser.parse_args()
     if args.command == "run-weekly":
         run_weekly(dry_run=args.dry_run)
+    elif args.command == "compute-features":
+        compute_features()
 
 
 if __name__ == "__main__":

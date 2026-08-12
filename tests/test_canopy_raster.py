@@ -3,7 +3,11 @@ import pytest
 import rasterio
 from rasterio.transform import from_origin
 
-from canopy.clients.canopy_raster import RASTER_CRS, canopy_pct_for_geometry
+from canopy.clients.canopy_raster import (
+    RASTER_CRS,
+    canopy_pct_for_geometry,
+    neighborhood_canopy_buffer_pct,
+)
 
 
 @pytest.fixture()
@@ -48,3 +52,22 @@ def test_canopy_pct_for_geometry_returns_none_outside_raster(fake_raster):
     }
 
     assert canopy_pct_for_geometry(geom, RASTER_CRS) is None
+
+
+def test_neighborhood_canopy_buffer_pct_reaches_further_than_the_parcel(fake_raster):
+    # exactly one background pixel (col 1, row 3), immediately west of the
+    # 40%-canopy block (which starts at col 2) -- full pixel bounds so its
+    # center is unambiguously inside the polygon under rasterio's default
+    # center-point pixel inclusion rule
+    geom = {
+        "type": "Polygon",
+        "coordinates": [[
+            [1630030, 1379910], [1630060, 1379910],
+            [1630060, 1379880], [1630030, 1379880], [1630030, 1379910],
+        ]],
+    }
+
+    # unbuffered: entirely background (255, excluded) -> no valid pixels
+    assert neighborhood_canopy_buffer_pct(geom, RASTER_CRS, buffer_m=0) is None
+    # buffered far enough to reach into the 40%-canopy block
+    assert neighborhood_canopy_buffer_pct(geom, RASTER_CRS, buffer_m=60) == pytest.approx(40.0)

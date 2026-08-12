@@ -1,0 +1,21 @@
+/* Ported from the <style> block inline in docs/RatingUI.jsx. */
+
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500&family=Karla:wght@400;500&family=IBM+Plex+Mono:wght@400&display=swap');
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid #5b9aa8; /* C.tide */
+  outline-offset: 2px;
+}
+
+input,
+select {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  button {
+    transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+  }
+}

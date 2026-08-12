@@ -30,9 +30,3 @@ TARGET_ZIPS = _split_zips(
 # RentCast free tier is 50 calls/month. One call-batch per zip per weekly
 # run keeps ~6 zips x ~4.3 weeks/month well under budget with headroom.
 RENTCAST_MONTHLY_CALL_BUDGET = 50
-
-# Stage 4 rule-based filter thresholds. Conservative defaults so the first
-# few runs don't come back empty; tune after seeing real output.
-MIN_LOT_SIZE_SQFT = int(os.environ.get("MIN_LOT_SIZE_SQFT", "15000"))
-MIN_CANOPY_PCT = float(os.environ.get("MIN_CANOPY_PCT", "40"))
-REQUIRE_ADJACENCY_FLAG = os.environ.get("REQUIRE_ADJACENCY_FLAG", "true").lower() == "true"

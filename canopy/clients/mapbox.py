@@ -12,6 +12,7 @@ import requests
 from canopy.config import MAPBOX_API_KEY
 
 STATIC_IMAGE_URL = "https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/{lon},{lat},{zoom}/{width}x{height}"
+GEOCODING_URL = "https://api.mapbox.com/search/geocode/v6/forward"
 
 DEFAULT_ZOOM = 16
 DEFAULT_SIZE = (800, 600)
@@ -31,3 +32,24 @@ def fetch_satellite_image(latitude: float, longitude: float, zoom: int = DEFAULT
     if resp.status_code != 200:
         raise MapboxError(f"Mapbox static image request failed ({resp.status_code}): {resp.text[:300]}")
     return resp.content
+
+
+def geocode_address(query: str) -> tuple[float, float] | None:
+    """Forward-geocodes a free-text place/address via Mapbox's Geocoding
+    v6 API (confirmed live). Returns (latitude, longitude), or None if
+    nothing matched -- callers decide how to surface that (canopy/rating.py
+    treats it as a validation error on anchor creation)."""
+    if not MAPBOX_API_KEY:
+        raise MapboxError("MAPBOX_API_KEY is not set")
+
+    resp = requests.get(
+        GEOCODING_URL, params={"q": query, "access_token": MAPBOX_API_KEY, "limit": 1}, timeout=15
+    )
+    if resp.status_code != 200:
+        raise MapboxError(f"Mapbox geocoding request failed ({resp.status_code}): {resp.text[:300]}")
+
+    features = resp.json().get("features", [])
+    if not features:
+        return None
+    lon, lat = features[0]["geometry"]["coordinates"]
+    return lat, lon

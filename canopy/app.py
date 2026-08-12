@@ -1,11 +1,15 @@
 import os
+from pathlib import Path
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, send_from_directory
 
-from canopy.db.models import Listing, Parcel, Score
-from canopy.db.session import SessionLocal
+from canopy.api import api_bp
 
-app = Flask(__name__)
+# Vite builds here (frontend/vite.config.js: outDir "../canopy/static/dist")
+FRONTEND_DIST = Path(__file__).parent / "static" / "dist"
+
+app = Flask(__name__, static_folder=str(FRONTEND_DIST), static_url_path="/static/dist")
+app.register_blueprint(api_bp)  # /api/* -- Werkzeug matches this exact prefix before the SPA catch-all below
 
 
 @app.get("/healthz")
@@ -13,26 +17,13 @@ def healthz():
     return jsonify(status="ok")
 
 
-@app.get("/")
-def listings():
-    session = SessionLocal()
-    try:
-        passed = (
-            session.query(Listing, Score, Parcel)
-            .join(Score, Score.listing_id == Listing.id)
-            .outerjoin(Parcel, Parcel.listing_id == Listing.id)
-            .filter(Score.passed_filter.is_(True))
-            .order_by(Score.scored_at.desc())
-            .all()
-        )
-        total_scored = session.query(Score).count()
-        candidates = [
-            {"listing": listing, "score": score, "parcel": parcel}
-            for listing, score, parcel in passed
-        ]
-        return render_template("listings.html", candidates=candidates, total_scored=total_scored)
-    finally:
-        session.close()
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def spa(path):
+    index = FRONTEND_DIST / "index.html"
+    if not index.exists():
+        return jsonify(error="frontend not built -- run `npm run build` in frontend/"), 503
+    return send_from_directory(FRONTEND_DIST, "index.html")
 
 
 if __name__ == "__main__":

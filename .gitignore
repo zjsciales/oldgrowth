@@ -10,3 +10,6 @@ venv/
 .DS_Store
 data/*.tif
 data/*.tiff
+frontend/node_modules/
+frontend/dist/
+canopy/static/dist/
