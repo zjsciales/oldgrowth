@@ -16,6 +16,10 @@ MAPBOX_API_KEY = os.environ.get("MAPBOX_API_KEY", "")
 DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql://canopy:canopy@localhost:5433/canopy"
 )
+# Some hosted Postgres providers (historically Heroku; possibly Railway)
+# inject the legacy "postgres://" scheme, which SQLAlchemy 2.0 rejects.
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = "postgresql://" + DATABASE_URL[len("postgres://") :]
 
 SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
