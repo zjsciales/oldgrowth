@@ -76,11 +76,12 @@ export default function Consider({ rater, anchors }) {
           <ParcelPlate listing={listing} />
         </Card>
         <div className="flex flex-col gap-4">
-          <div className="flex items-center justify-center"
-            style={{ background: "#EFF2ED", border: `1px solid ${C.line}`, borderRadius: 8, minHeight: 150 }}>
-            <span style={{ fontFamily: BODY, fontSize: 12, color: C.mist, textAlign: "center", padding: 16 }}>
-              Listing photo<br />wired to listing.photos[0]
-            </span>
+          <div style={{ borderRadius: 8, overflow: "hidden", border: `1px solid ${C.line}`, minHeight: 150 }}>
+            <img
+              src={`/api/listings/${listing.id}/location-map`}
+              alt={`Map of the area around ${listing.address}`}
+              style={{ width: "100%", height: "100%", display: "block", objectFit: "cover" }}
+            />
           </div>
           <div className="grid gap-4" style={{ gridTemplateColumns: "1fr 1fr" }}>
             <Figure label="Asking" value={listing.price ? `$${(listing.price / 1000).toFixed(0)}k` : "?"} />

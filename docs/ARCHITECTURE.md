@@ -267,3 +267,16 @@ pass never ranks, it only describes and sanity-checks.
   last judgment.
 - Broker-sponsored MLS feed for real-time coverage.
 - SMS/push notification channel.
+- **Real front-elevation listing photos.** RentCast's sale-listings
+  endpoint (the batched-by-zip one we're allowed to call) has no photo
+  field at all — confirmed against real stored payloads. A per-listing
+  detail call might have one, but calling RentCast per-property is
+  explicitly ruled out (`CLAUDE.md`). The only real source found is
+  Google Street View Static API (~$0.007/panorama, trivial cost at this
+  scale, fetched lazily like vision) — deferred because it's a new paid
+  API/key relationship, and Street View coverage has real gaps for
+  newer or private-road subdivisions that would need a graceful
+  fallback. In the meantime, Consider's photo slot shows a ~1mi-radius
+  location map (`canopy/clients/mapbox.py`'s `fetch_location_map`) —
+  free (same Mapbox relationship already in use), gives locational
+  context, but isn't a photo of the house itself.

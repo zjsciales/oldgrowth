@@ -7,15 +7,22 @@ lot -- a first live test showed the sub-agent couldn't confirm water/park
 adjacency from a tightly-cropped image, since those features often sit
 just outside the parcel boundary."""
 
+import math
+
 import requests
 
 from canopy.config import MAPBOX_API_KEY
 
 STATIC_IMAGE_URL = "https://api.mapbox.com/styles/v1/mapbox/satellite-v9/static/{lon},{lat},{zoom}/{width}x{height}"
+LOCATION_MAP_URL = "https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/{marker}/{bbox}/{width}x{height}"
 GEOCODING_URL = "https://api.mapbox.com/search/geocode/v6/forward"
 
 DEFAULT_ZOOM = 16
 DEFAULT_SIZE = (800, 600)
+LOCATION_MAP_RADIUS_MILES = 1.0
+LOCATION_MAP_PIN_COLOR = "3E6B45"  # theme.js C.canopyDeep
+METERS_PER_MILE = 1609.34
+METERS_PER_DEGREE_LAT = 111_320.0
 
 # Anchors only ever make sense within the app's actual service area (same
 # metro TARGET_ZIPS already scopes ingest to). Without this, Mapbox's
@@ -42,6 +49,34 @@ def fetch_satellite_image(latitude: float, longitude: float, zoom: int = DEFAULT
     resp = requests.get(url, params={"access_token": MAPBOX_API_KEY}, timeout=30)
     if resp.status_code != 200:
         raise MapboxError(f"Mapbox static image request failed ({resp.status_code}): {resp.text[:300]}")
+    return resp.content
+
+
+def fetch_location_map(
+    latitude: float, longitude: float, radius_miles: float = LOCATION_MAP_RADIUS_MILES
+) -> bytes:
+    """A streets-style map centered on the listing with a pin marker,
+    bbox-fit to roughly `radius_miles` around it -- gives a quick sense of
+    location (nearby roads, landmarks, neighborhoods) as a substitute for
+    an actual front-elevation photo, which isn't available from any
+    current source without either spamming RentCast per-listing (against
+    docs/CLAUDE.md's explicit constraint) or adding a new paid API
+    (Google Street View -- deferred, see docs/ARCHITECTURE.md). Confirmed
+    live against a real Wilmington address before wiring this up."""
+    if not MAPBOX_API_KEY:
+        raise MapboxError("MAPBOX_API_KEY is not set")
+
+    radius_m = radius_miles * METERS_PER_MILE
+    dlat = radius_m / METERS_PER_DEGREE_LAT
+    dlon = radius_m / (METERS_PER_DEGREE_LAT * math.cos(math.radians(latitude)))
+    bbox = f"[{longitude - dlon},{latitude - dlat},{longitude + dlon},{latitude + dlat}]"
+    marker = f"pin-s+{LOCATION_MAP_PIN_COLOR}({longitude},{latitude})"
+
+    width, height = DEFAULT_SIZE
+    url = LOCATION_MAP_URL.format(marker=marker, bbox=bbox, width=width, height=height)
+    resp = requests.get(url, params={"access_token": MAPBOX_API_KEY}, timeout=30)
+    if resp.status_code != 200:
+        raise MapboxError(f"Mapbox location map request failed ({resp.status_code}): {resp.text[:300]}")
     return resp.content
 
 

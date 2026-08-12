@@ -5,9 +5,9 @@ and serializes responses. See docs/UI_SPEC.md §5 for the contract."""
 import logging
 import uuid
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
-from canopy.clients.mapbox import MapboxError
+from canopy.clients.mapbox import MapboxError, fetch_location_map
 from canopy.db.models import Anchor, Listing, ListingFeatures, ModelRun, Tag
 from canopy.db.session import SessionLocal
 from canopy.features import FEATURE_SET_VERSION
@@ -104,6 +104,29 @@ def _anchor_json(anchor: Anchor) -> dict:
         "ideal": anchor.ideal_minutes, "limit": anchor.limit_minutes,
         "createdBy": anchor.created_by, "active": anchor.active,
     }
+
+
+@api_bp.get("/listings/<listing_id>/location-map")
+def location_map(listing_id):
+    """Streets-style map + pin, ~1mi radius -- stands in for a listing
+    photo (canopy/clients/mapbox.py's fetch_location_map docstring has
+    the full "why not a real photo" context). A fixed lat/lon's map never
+    changes, so this is safe to cache aggressively client-side rather
+    than re-fetching from Mapbox on every view."""
+    session = SessionLocal()
+    try:
+        listing = session.get(Listing, listing_id)
+        if listing is None:
+            return jsonify(error="listing not found"), 404
+        try:
+            image_bytes = fetch_location_map(listing.latitude, listing.longitude)
+        except MapboxError as exc:
+            return jsonify(error=str(exc)), 502
+        return Response(image_bytes, mimetype="image/png", headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+        })
+    finally:
+        session.close()
 
 
 @api_bp.get("/batch")

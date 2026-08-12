@@ -264,3 +264,9 @@ maintained, not wired to anything.
   include `tagStats` (per-feature credit/blame/kind) — needed by the
   Patterns tab preview and not something `SCORING_MODEL.md`'s
   `ModelRun`/`coefficients` alone could provide.
+- **The photo slot** (§6's "photo is secondary to the plate") serves a
+  new `GET /api/listings/{id}/location-map` endpoint, not a real listing
+  photo — no current source has one without either spamming RentCast
+  per-listing or adding a new paid API (Google Street View, deferred;
+  see `ARCHITECTURE.md`'s Future Extensions). It's a ~1mi-radius streets
+  map with a pin, giving locational context in the meantime.

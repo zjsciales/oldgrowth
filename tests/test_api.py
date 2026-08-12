@@ -39,6 +39,48 @@ def test_tags_returns_seeded_taxonomy(monkeypatch, session):
     assert body["tags"][0]["mappedFeatures"] == ["parcel_canopy_pct"]
 
 
+def test_location_map_returns_image_with_long_cache_header(monkeypatch, session):
+    session.add(_listing("l1"))
+    session.commit()
+    monkeypatch.setattr("canopy.api.SessionLocal", lambda: session)
+    monkeypatch.setattr("canopy.api.fetch_location_map", lambda lat, lon, **kw: b"fake-png-bytes")
+    client = app.test_client()
+
+    resp = client.get("/api/listings/l1/location-map")
+
+    assert resp.status_code == 200
+    assert resp.data == b"fake-png-bytes"
+    assert resp.mimetype == "image/png"
+    assert "max-age=31536000" in resp.headers["Cache-Control"]
+
+
+def test_location_map_404s_for_unknown_listing(monkeypatch, session):
+    monkeypatch.setattr("canopy.api.SessionLocal", lambda: session)
+    client = app.test_client()
+
+    resp = client.get("/api/listings/nope/location-map")
+
+    assert resp.status_code == 404
+
+
+def test_location_map_502s_on_mapbox_failure(monkeypatch, session):
+    from canopy.clients.mapbox import MapboxError
+
+    session.add(_listing("l1"))
+    session.commit()
+    monkeypatch.setattr("canopy.api.SessionLocal", lambda: session)
+
+    def _raise(lat, lon, **kw):
+        raise MapboxError("boom")
+
+    monkeypatch.setattr("canopy.api.fetch_location_map", _raise)
+    client = app.test_client()
+
+    resp = client.get("/api/listings/l1/location-map")
+
+    assert resp.status_code == 502
+
+
 def test_batch_requires_rater(monkeypatch, session):
     client = _client(monkeypatch, session)
 
