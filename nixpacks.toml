@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["nodejs_20"]
+nixPkgs = ["python3", "nodejs_20"]
 
 [phases.frontend]
 dependsOn = ["setup"]
