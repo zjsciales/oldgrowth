@@ -9,19 +9,22 @@ const CATEGORY_LABELS = { beach: "Beach", grocery: "Errands", social: "People", 
 export default function Places({ rater }) {
   const { anchors, loading, add, update, remove } = useAnchors();
   const [label, setLabel] = useState("");
+  const [address, setAddress] = useState("");
   const [category, setCategory] = useState("social");
   const [saving, setSaving] = useState(false);
   const [addError, setAddError] = useState(null);
 
   async function handleAdd() {
-    if (!label.trim()) return;
+    if (!label.trim() || !address.trim()) return;
     setSaving(true);
     setAddError(null);
     try {
-      // one text field, geocoded server-side (canopy/clients/mapbox.py) --
-      // no separate lat/lon inputs needed
-      await add({ label: label.trim(), category, created_by: rater, address: label.trim() });
+      // address is geocoded server-side (canopy/clients/mapbox.py) and
+      // validated against the Wilmington metro area; label is just
+      // display text and never touches the geocoder
+      await add({ label: label.trim(), category, created_by: rater, address: address.trim() });
       setLabel("");
+      setAddress("");
     } catch (err) {
       setAddError(err.message);
     } finally {
@@ -48,11 +51,19 @@ export default function Places({ rater }) {
 
       <Card>
         <div className="flex flex-wrap gap-3 items-end">
-          <div className="flex-1" style={{ minWidth: 200 }}>
+          <div className="flex-1" style={{ minWidth: 160 }}>
             <label style={{ fontFamily: BODY, fontSize: 12, color: C.mist, display: "block", marginBottom: 6 }}>
-              Address or place name
+              Label
             </label>
             <input value={label} onChange={(e) => setLabel(e.target.value)}
+              placeholder="e.g. Mom's house"
+              style={{ width: "100%", fontFamily: BODY, fontSize: 14, padding: "10px 12px", borderRadius: 6, border: `1px solid ${C.line}`, background: C.paper, color: C.ink }} />
+          </div>
+          <div className="flex-1" style={{ minWidth: 200 }}>
+            <label style={{ fontFamily: BODY, fontSize: 12, color: C.mist, display: "block", marginBottom: 6 }}>
+              Address
+            </label>
+            <input value={address} onChange={(e) => setAddress(e.target.value)}
               placeholder="e.g. Wrightsville Beach public access"
               style={{ width: "100%", fontFamily: BODY, fontSize: 14, padding: "10px 12px", borderRadius: 6, border: `1px solid ${C.line}`, background: C.paper, color: C.ink }} />
           </div>
@@ -88,6 +99,11 @@ export default function Places({ rater }) {
                 <div style={{ fontFamily: BODY, fontSize: 12, color: C.mist }}>
                   {CATEGORY_LABELS[a.category] || a.category}
                 </div>
+                {a.resolvedAddress && (
+                  <div style={{ fontFamily: BODY, fontSize: 11, color: C.mist, marginTop: 2 }}>
+                    {a.resolvedAddress}
+                  </div>
+                )}
               </div>
               <div className="flex flex-wrap gap-5 items-end">
                 {[

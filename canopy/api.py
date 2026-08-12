@@ -100,7 +100,7 @@ def _listing_card(session, listing: Listing, features: ListingFeatures) -> dict:
 def _anchor_json(anchor: Anchor) -> dict:
     return {
         "id": anchor.id, "label": anchor.label, "category": anchor.category,
-        "lat": anchor.lat, "lon": anchor.lon,
+        "lat": anchor.lat, "lon": anchor.lon, "resolvedAddress": anchor.resolved_address,
         "ideal": anchor.ideal_minutes, "limit": anchor.limit_minutes,
         "createdBy": anchor.created_by, "active": anchor.active,
     }

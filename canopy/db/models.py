@@ -193,6 +193,11 @@ class Anchor(Base):
     category: Mapped[str] = mapped_column(String)  # beach | grocery | social | work | school
     lat: Mapped[float] = mapped_column(Float)
     lon: Mapped[float] = mapped_column(Float)
+    # What Mapbox actually resolved the input address to -- shown back to
+    # the rater so they can confirm the geocode, not just trust it (see
+    # canopy/clients/mapbox.py's WILMINGTON_METRO_BBOX comment for why
+    # that matters). Null for anchors created via direct lat/lon.
+    resolved_address: Mapped[str | None] = mapped_column(String, nullable=True)
     ideal_minutes: Mapped[int] = mapped_column(Integer, default=15)
     limit_minutes: Mapped[int] = mapped_column(Integer, default=30)
     created_by: Mapped[str] = mapped_column(ForeignKey("raters.id"))

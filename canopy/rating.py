@@ -310,16 +310,17 @@ def create_anchor(
     ideal_minutes: int = 15,
     limit_minutes: int = 30,
 ) -> Anchor:
+    resolved_address = None
     if lat is None or lon is None:
         if not address:
             raise RatingValidationError("must provide either lat/lon or an address to geocode")
         geocoded = geocode_address(address)
         if geocoded is None:
             raise RatingValidationError(f"could not geocode address: {address!r}")
-        lat, lon = geocoded
+        lat, lon, resolved_address = geocoded
 
     anchor = Anchor(
-        label=label, category=category, lat=lat, lon=lon,
+        label=label, category=category, lat=lat, lon=lon, resolved_address=resolved_address,
         ideal_minutes=ideal_minutes, limit_minutes=limit_minutes, created_by=created_by,
     )
     session.add(anchor)

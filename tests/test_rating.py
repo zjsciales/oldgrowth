@@ -329,17 +329,21 @@ def test_create_anchor_with_direct_coordinates(session):
     assert anchor.id is not None
     assert anchor.ideal_minutes == 15
     assert anchor.limit_minutes == 30
+    assert anchor.resolved_address is None
 
 
 def test_create_anchor_geocodes_address(session, monkeypatch):
     session.add(Rater(id="zach", display_name="Zach"))
     session.commit()
-    monkeypatch.setattr("canopy.rating.geocode_address", lambda q: (34.5, -77.5))
+    monkeypatch.setattr(
+        "canopy.rating.geocode_address", lambda q: (34.5, -77.5, "123 Main St, Wilmington, NC")
+    )
 
     anchor = create_anchor(session, label="Work", category="work", created_by="zach", address="123 Main St")
 
     assert anchor.lat == 34.5
     assert anchor.lon == -77.5
+    assert anchor.resolved_address == "123 Main St, Wilmington, NC"
 
 
 def test_create_anchor_raises_when_geocoding_fails(session, monkeypatch):
