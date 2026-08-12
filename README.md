@@ -42,10 +42,19 @@ another; the Vite dev server proxies `/api/*` to Flask.
 
 ## Deploy (Railway)
 
-`nixpacks.toml` runs a Node build phase (`npm --prefix frontend ci && npm
---prefix frontend run build`) ahead of the Python install/start, so
-`canopy/static/dist/` exists before `gunicorn canopy.app:app` serves `/`.
-Not yet run for real — see below.
+`railway.json` builds from the repo's `Dockerfile` (multi-stage: `node:20-slim`
+builds the frontend into `canopy/static/dist/`, then `python:3.12-slim` installs
+`requirements.txt` and copies the app + built assets in). Nixpacks was tried
+first and abandoned after several failed deploys — its auto-detected Python
+phase and a hand-added Node phase kept fighting each other (a custom
+`nixPkgs`/`phases.install` override replaces rather than merges with the
+provider's own, and even after separating them, `libexpat` — a runtime dep of
+rasterio/GDAL, needed for XML-based raster formats — never reliably reached
+the running process via Nix's `LD_LIBRARY_PATH` wiring). The Dockerfile
+installs `libexpat1` via `apt-get` directly, which registers it in the OS's
+standard linker cache; verified locally end-to-end with `docker build` +
+`docker run` against real Postgres (`/healthz`, `/`, and `/api/tags` all
+returned correctly) before trusting it to Railway.
 
 1. `railway init` in this directory (or link an existing project with `railway link`).
 2. `railway add` a Postgres plugin — Railway injects `DATABASE_URL` automatically;
