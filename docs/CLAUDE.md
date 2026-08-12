@@ -33,11 +33,13 @@ head`). See `ARCHITECTURE.md` for directory layout.
   threshold on a continuous feature the model should learn nuance
   around. The distinction that matters: it scopes the search the same
   way "for sale" already scopes the RentCast query, it doesn't eliminate
-  a listing based on an uncertain guess at a threshold. Enforced in two
+  a listing based on an uncertain guess at a threshold. Enforced in three
   places — `canopy/cli.py` skips GIS/feature/vision compute for excluded
-  types going forward, and `canopy/rating.py`'s candidate queries filter
-  them out directly, so listings already processed before an exclusion
-  was added still can't surface without a data migration. Don't extend
+  types going forward, `canopy/rating.py`'s candidate queries (via
+  `excluded_listing_ids`) filter them out of the batch/pair endpoints,
+  and `canopy/model.py`'s `compute_digest_slots` filters them out of the
+  weekly digest — so listings already processed before an exclusion was
+  added still can't surface anywhere without a data migration. Don't extend
   this pattern to anything that's actually a preference (canopy %, lot
   size, adjacency) — those still go through tag-driven hinge
   classification per `SCORING_MODEL.md` §4, never a hard cutoff.

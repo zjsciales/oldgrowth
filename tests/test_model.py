@@ -378,6 +378,34 @@ def test_compute_digest_slots_excludes_near_identical_scores_from_disagreements(
     assert plan["disagreements"] == []
 
 
+def test_compute_digest_slots_excludes_hard_no_property_types(session):
+    """l1 is a Condo -- a hard no, not a soft preference -- and must
+    never appear in the digest even though PreferenceScore rows already
+    exist for it (e.g. from before the exclusion was configured)."""
+    session.add_all([Rater(id="zach", display_name="Zach"), Rater(id="andrea", display_name="Andrea")])
+    session.add(_listing("l0", property_type="Single Family"))
+    session.add(_listing("l1", property_type="Condo"))
+    session.commit()
+    run_a = ModelRun(rater_id="zach", feature_set_version="v1", n_pairs=0, coefficients={}, scaler_params={})
+    run_b = ModelRun(rater_id="andrea", feature_set_version="v1", n_pairs=0, coefficients={}, scaler_params={})
+    session.add_all([run_a, run_b])
+    session.commit()
+    session.add_all([
+        PreferenceScore(listing_id="l0", model_run_id=run_a.id, raw_score=1.0, display_score=90, pred_variance=0.1),
+        PreferenceScore(listing_id="l0", model_run_id=run_b.id, raw_score=1.0, display_score=90, pred_variance=0.1),
+        PreferenceScore(listing_id="l1", model_run_id=run_a.id, raw_score=5.0, display_score=99, pred_variance=0.1),
+        PreferenceScore(listing_id="l1", model_run_id=run_b.id, raw_score=5.0, display_score=99, pred_variance=0.1),
+    ])
+    session.commit()
+
+    plan = compute_digest_slots(session, "zach", "andrea")
+
+    all_ids = {
+        d["listing_id"] for d in plan["top_ranked"] + plan["uncertain"] + plan["wildcard"]
+    }
+    assert all_ids == {"l0"}
+
+
 def test_compute_digest_slots_flags_same_verdict_different_tags(session):
     session.add_all([Rater(id="zach", display_name="Zach"), Rater(id="andrea", display_name="Andrea")])
     session.add(Tag(code="mature_canopy", label="Trees", polarity="positive", mapped_features=[]))

@@ -34,7 +34,7 @@ from canopy.db.models import (
 )
 from canopy.features import FEATURE_SET_VERSION, anchor_rollups
 from canopy.model_prior import COLD_START_PRIOR
-from canopy.rating import ensure_anchor_times
+from canopy.rating import excluded_listing_ids, ensure_anchor_times
 
 logger = logging.getLogger(__name__)
 
@@ -643,7 +643,11 @@ def compute_digest_slots(session: Session, rater_a_id: str, rater_b_id: str) -> 
 
     scores_a = {ps.listing_id: ps for ps in session.query(PreferenceScore).filter_by(model_run_id=run_a.id)}
     scores_b = {ps.listing_id: ps for ps in session.query(PreferenceScore).filter_by(model_run_id=run_b.id)}
-    common_ids = sorted(set(scores_a) & set(scores_b))
+    # Hard-no property types (e.g. Condo) must never reach the digest,
+    # same as they're excluded from the rating UI's candidate queries --
+    # see canopy/config.py's EXCLUDED_PROPERTY_TYPES.
+    excluded_ids = excluded_listing_ids(session)
+    common_ids = sorted((set(scores_a) & set(scores_b)) - excluded_ids)
     if not common_ids:
         return {"ready": False, "top_ranked": [], "uncertain": [], "wildcard": [], "disagreements": [], "same_verdict_different_tags": []}
 

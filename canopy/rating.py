@@ -200,7 +200,7 @@ def _listings_for(session: Session, listing_ids: list[str]) -> list[Listing]:
     return [by_id[lid] for lid in listing_ids if lid in by_id]
 
 
-def _excluded_listing_ids(session: Session) -> set[str]:
+def excluded_listing_ids(session: Session) -> set[str]:
     """Property types that are never candidates (e.g. Condo) -- see
     canopy/config.py's EXCLUDED_PROPERTY_TYPES. Enforced here (not just in
     cli.py's pipeline) so listings featured/scored before an exclusion was
@@ -217,7 +217,7 @@ def get_batch(session: Session, rater_id: str, n: int = 40) -> list[Listing]:
         listing_id for (listing_id,) in
         session.query(Judgment.listing_id).filter(Judgment.rater_id == rater_id)
     }
-    excluded_ids = _excluded_listing_ids(session)
+    excluded_ids = excluded_listing_ids(session)
     candidates = (
         session.query(ListingFeatures)
         .filter(ListingFeatures.feature_set_version == FEATURE_SET_VERSION)
@@ -242,7 +242,7 @@ def get_batch(session: Session, rater_id: str, n: int = 40) -> list[Listing]:
 
 
 def _random_pair(session: Session) -> tuple[Listing, Listing]:
-    excluded_ids = _excluded_listing_ids(session)
+    excluded_ids = excluded_listing_ids(session)
     ids = [
         row[0] for row in
         session.query(ListingFeatures.listing_id)
@@ -268,7 +268,7 @@ def get_pair(session: Session, rater_id: str) -> tuple[Listing, Listing, str]:
         listing_a, listing_b = _random_pair(session)
         return listing_a, listing_b, "random"
 
-    excluded_ids = _excluded_listing_ids(session)
+    excluded_ids = excluded_listing_ids(session)
     scores = (
         session.query(PreferenceScore)
         .filter(PreferenceScore.model_run_id == latest_run.id)
