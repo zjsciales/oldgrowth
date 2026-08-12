@@ -33,12 +33,15 @@ api_bp = Blueprint("api", __name__, url_prefix="/api")
 DEFAULT_EDGES = {"n": "buildable", "e": "buildable", "s": "buildable", "w": "buildable"}
 
 # A batch can contain listings that have never had a vision pass; each one
-# is a synchronous Anthropic + Mapbox round-trip. Uncapped, a batch full of
-# never-viewed listings (e.g. right after a fresh ingest) can take minutes
-# and blow past gunicorn's worker timeout, killing the request outright.
-# Capping keeps every batch response fast; listings past the cap simply
-# render without vision-derived fields until a later view processes them.
-MAX_VISION_CALLS_PER_BATCH = 6
+# is a synchronous Anthropic + Mapbox round-trip (each individually bounded
+# by its own client timeout -- see anthropic_client.REQUEST_TIMEOUT_SECONDS
+# and mapbox.py's fetch_satellite_image -- but still real wall-clock time
+# on the happy path). Uncapped, a batch full of never-viewed listings (e.g.
+# right after a fresh ingest) can blow past gunicorn's worker timeout and
+# take the worker down. Capping keeps every batch response fast; listings
+# past the cap simply render without vision-derived fields until a later
+# view processes them.
+MAX_VISION_CALLS_PER_BATCH = 3
 
 
 def _features_for(session, listing: Listing) -> ListingFeatures | None:

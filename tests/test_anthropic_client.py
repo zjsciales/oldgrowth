@@ -1,6 +1,7 @@
 import json
 from dataclasses import dataclass
 
+import canopy.clients.anthropic_client as anthropic_client
 from canopy.clients.anthropic_client import extract_structural_features
 
 FAKE_RESULT = {
@@ -60,3 +61,20 @@ def test_extract_structural_features_single_text_block(monkeypatch):
     result = extract_structural_features({}, b"fake-image-bytes")
 
     assert result == FAKE_RESULT
+
+
+def test_client_sets_an_explicit_request_timeout(monkeypatch):
+    """The SDK's own default timeout is generous enough to outlast
+    gunicorn's worker timeout on its own -- a single hung call took the
+    whole worker down in production. Must be explicitly bounded."""
+    captured = {}
+
+    class _FakeAnthropic:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(anthropic_client.anthropic, "Anthropic", _FakeAnthropic)
+
+    anthropic_client._client()
+
+    assert captured["timeout"] == anthropic_client.REQUEST_TIMEOUT_SECONDS

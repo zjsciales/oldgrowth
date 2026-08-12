@@ -18,9 +18,15 @@ from canopy.config import ANTHROPIC_API_KEY
 
 MODEL = "claude-sonnet-5"
 
+# The SDK's own default (per-request, including retries) is generous enough
+# to outlast gunicorn's worker timeout on its own -- a single hung call took
+# the whole worker down in production. This is a single-image classification
+# call; it should complete in a few seconds, not minutes.
+REQUEST_TIMEOUT_SECONDS = 30.0
+
 
 def _client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=REQUEST_TIMEOUT_SECONDS)
 
 
 ARCH_STYLES = [
