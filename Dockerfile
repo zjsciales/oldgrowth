@@ -20,4 +20,4 @@ COPY . .
 COPY --from=frontend /app/canopy/static/dist ./canopy/static/dist
 
 EXPOSE 8080
-CMD exec gunicorn canopy.app:app --bind 0.0.0.0:${PORT:-8080}
+CMD exec gunicorn canopy.app:app --bind 0.0.0.0:${PORT:-8080} --timeout 60

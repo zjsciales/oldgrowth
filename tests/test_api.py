@@ -66,6 +66,36 @@ def test_batch_returns_listing_cards(monkeypatch, session):
     assert card["drives"] == {}
 
 
+def test_batch_caps_synchronous_vision_calls(monkeypatch, session):
+    """A batch full of never-viewed listings must not fire a vision call
+    per listing -- that's the exact scenario that blew past gunicorn's
+    worker timeout on the first real Railway load (40 sequential
+    Anthropic calls in one request). All listings still come back as
+    cards; only the first MAX_VISION_CALLS_PER_BATCH trigger vision."""
+    session.add(Rater(id="zach", display_name="Zach"))
+    n_listings = 10
+    for i in range(n_listings):
+        session.add(_listing(f"l{i}"))
+        session.add(_features(f"l{i}"))
+    session.commit()
+
+    calls = []
+    monkeypatch.setattr("canopy.api.SessionLocal", lambda: session)
+    monkeypatch.setattr(
+        "canopy.api.ensure_vision_features",
+        lambda session_, listing, features: calls.append(listing.id) or features,
+    )
+    client = app.test_client()
+
+    resp = client.get(f"/api/batch?rater=zach&n={n_listings}")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert len(body["listings"]) == n_listings
+    from canopy.api import MAX_VISION_CALLS_PER_BATCH
+    assert len(calls) == MAX_VISION_CALLS_PER_BATCH
+
+
 def test_pair_returns_two_cards_and_strategy(monkeypatch, session):
     session.add(Rater(id="zach", display_name="Zach"))
     session.add_all([_listing("l1"), _listing("l2")])
