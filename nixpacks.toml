@@ -1,16 +1,9 @@
-providers = ["python"]
-
 [phases.setup]
 nixPkgs = ["nodejs_20"]
 
-[phases.install]
-cmds = [
-  "pip install -r requirements.txt",
-  "npm --prefix frontend ci",
-]
-
-[phases.build]
-cmds = ["npm --prefix frontend run build"]
+[phases.frontend]
+dependsOn = ["setup"]
+cmds = ["npm --prefix frontend ci", "npm --prefix frontend run build"]
 
 [start]
 cmd = "gunicorn canopy.app:app"
