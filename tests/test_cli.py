@@ -4,11 +4,11 @@ from canopy.cli import _unenriched_backlog, _unfeatured_backlog, run_weekly
 from canopy.db.models import Listing, ListingFeatures, Parcel, Rater
 
 
-def _listing(listing_id: str) -> Listing:
+def _listing(listing_id: str, property_type: str | None = None) -> Listing:
     return Listing(
         id=listing_id, formatted_address=f"{listing_id} Test St", city="Wilmington",
         state="NC", zip_code="28409", latitude=34.1, longitude=-77.9,
-        status="Active", price=500000, raw={},
+        status="Active", price=500000, raw={}, property_type=property_type,
     )
 
 
@@ -120,6 +120,31 @@ def test_run_weekly_reprocesses_stuck_enrichment_backlog(monkeypatch, session):
 
     assert enrich_calls == ["l2"]
     assert score_canopy_calls == ["l2"]
+
+
+def test_run_weekly_skips_excluded_property_types(monkeypatch, session):
+    """l1 is a Single Family (processed); l2 is a Condo -- a hard no, not
+    a soft preference -- and must never reach GIS enrichment, canopy
+    scoring, or feature computation at all."""
+    session.add(_listing("l1", property_type="Single Family"))
+    session.add(_listing("l2", property_type="Condo"))
+    session.add_all([Rater(id="zach", display_name="Zach"), Rater(id="andrea", display_name="Andrea")])
+    session.commit()
+
+    monkeypatch.setattr("canopy.cli.ingest_all_zips", lambda s: [session.get(Listing, "l1"), session.get(Listing, "l2")])
+    enrich_calls, score_canopy_calls, feature_calls = [], [], []
+    monkeypatch.setattr("canopy.cli.enrich_listings", lambda s, listings: enrich_calls.extend(x.id for x in listings))
+    monkeypatch.setattr("canopy.cli.score_canopy", lambda s, listings: score_canopy_calls.extend(x.id for x in listings))
+    monkeypatch.setattr(
+        "canopy.cli.compute_features_for_listings", lambda s, listings: feature_calls.extend(x.id for x in listings)
+    )
+    _stub_downstream_of_features(monkeypatch, session)
+
+    run_weekly()
+
+    assert enrich_calls == ["l1"]
+    assert score_canopy_calls == ["l1"]
+    assert feature_calls == ["l1"]
 
 
 def test_run_weekly_reprocesses_stuck_feature_backlog(monkeypatch, session):

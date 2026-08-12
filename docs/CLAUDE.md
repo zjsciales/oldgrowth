@@ -27,6 +27,20 @@ head`). See `ARCHITECTURE.md` for directory layout.
   out.** The original rule-based filter collapsed 1025 listings to 2 and
   was retired for exactly this reason (`PROJECT_SUMMARY.md` → Why). Don't
   reintroduce a hard elimination step anywhere in the pipeline.
+  **Exception**: `canopy.config.EXCLUDED_PROPERTY_TYPES` (e.g. Condo) is
+  not this kind of filter — it's a stated hard constraint on what counts
+  as a candidate at all (Zach/Andrea will never buy one), not a soft
+  threshold on a continuous feature the model should learn nuance
+  around. The distinction that matters: it scopes the search the same
+  way "for sale" already scopes the RentCast query, it doesn't eliminate
+  a listing based on an uncertain guess at a threshold. Enforced in two
+  places — `canopy/cli.py` skips GIS/feature/vision compute for excluded
+  types going forward, and `canopy/rating.py`'s candidate queries filter
+  them out directly, so listings already processed before an exclusion
+  was added still can't surface without a data migration. Don't extend
+  this pattern to anything that's actually a preference (canopy %, lot
+  size, adjacency) — those still go through tag-driven hinge
+  classification per `SCORING_MODEL.md` §4, never a hard cutoff.
 - The Claude vision pass (`canopy/vision.py`) is scoped to structural/
   architecture feature extraction + rationale writeup, run lazily once
   per listing on first view — not a bulk weekly step, and not the

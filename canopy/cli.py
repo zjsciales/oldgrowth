@@ -3,6 +3,7 @@
 import argparse
 import logging
 
+from canopy.config import EXCLUDED_PROPERTY_TYPES
 from canopy.db.models import Listing, ListingFeatures, Parcel, Rater
 from canopy.db.session import SessionLocal
 from canopy.digest import send_digest
@@ -12,6 +13,16 @@ from canopy.ingest import ingest_all_zips
 from canopy.model import compute_digest_slots, fit_model
 from canopy.model import score_listings as score_preferences
 from canopy.scoring import score_listings as score_canopy
+
+
+def _excluding_property_types(listings: list[Listing]) -> list[Listing]:
+    """Property types that are never candidates at all (e.g. Condo) skip
+    every downstream stage -- GIS enrichment, canopy/raster scoring,
+    feature computation, and (most importantly for cost) the lazy vision
+    pass, which only ever runs on listings that reach the rating UI as
+    candidates. Still ingested/stored (cheap, keeps market visibility),
+    just never processed further."""
+    return [listing for listing in listings if listing.property_type not in EXCLUDED_PROPERTY_TYPES]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -26,7 +37,8 @@ def _unenriched_backlog(session) -> list[Listing]:
     enriched_ids = {
         listing_id for (listing_id,) in session.query(Parcel.listing_id).filter(Parcel.enriched_at.isnot(None))
     }
-    return session.query(Listing).filter(~Listing.id.in_(enriched_ids)).all()
+    backlog = session.query(Listing).filter(~Listing.id.in_(enriched_ids)).all()
+    return _excluding_property_types(backlog)
 
 
 def _unfeatured_backlog(session) -> list[Listing]:
@@ -37,7 +49,8 @@ def _unfeatured_backlog(session) -> list[Listing]:
         listing_id for (listing_id,) in
         session.query(ListingFeatures.listing_id).filter(ListingFeatures.feature_set_version == FEATURE_SET_VERSION)
     }
-    return session.query(Listing).filter(~Listing.id.in_(featured_ids)).all()
+    backlog = session.query(Listing).filter(~Listing.id.in_(featured_ids)).all()
+    return _excluding_property_types(backlog)
 
 
 def run_weekly(dry_run: bool = False) -> None:
@@ -46,6 +59,7 @@ def run_weekly(dry_run: bool = False) -> None:
         logger.info("=== Stage 1: ingest ===")
         changed = ingest_all_zips(session)
         logger.info("%d new/changed listings", len(changed))
+        changed = _excluding_property_types(changed)
 
         enrich_backlog = _unenriched_backlog(session)
         # checked upfront, before any stage runs -- a listing stuck only
@@ -109,6 +123,7 @@ def compute_features() -> None:
             .filter(ListingFeatures.feature_set_version == FEATURE_SET_VERSION)
         }
         listings = session.query(Listing).filter(~Listing.id.in_(already_done)).all()
+        listings = _excluding_property_types(listings)
         logger.info("computing features for %d listings (%d already done)", len(listings), len(already_done))
         compute_features_for_listings(session, listings)
         logger.info("done")

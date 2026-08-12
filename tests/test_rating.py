@@ -228,6 +228,22 @@ def test_get_batch_post_model_orders_by_pred_variance(session):
     assert [listing.id for listing in batch] == ["l0", "l2", "l1"]
 
 
+def test_get_batch_excludes_hard_no_property_types(session):
+    """Condo/Apartment are a hard no, not a soft preference -- they must
+    never surface as rating candidates (and therefore never trigger a
+    vision call), regardless of how many other candidates exist."""
+    session.add(Rater(id="zach", display_name="Zach"))
+    session.add(_listing("l1", property_type="Single Family"))
+    session.add(_features("l1"))
+    session.add(_listing("l2", property_type="Condo"))
+    session.add(_features("l2"))
+    session.commit()
+
+    batch = get_batch(session, "zach", n=10)
+
+    assert {listing.id for listing in batch} == {"l1"}
+
+
 def test_get_pair_cold_start_returns_random_strategy(session):
     session.add(Rater(id="zach", display_name="Zach"))
     session.add_all([_listing("l1"), _listing("l2")])
@@ -269,6 +285,32 @@ def test_get_pair_post_model_picks_smallest_score_gap(session):
 
     assert strategy == "active"
     assert {a.id, b.id} == {"l0", "l1"}  # smallest raw_score gap
+
+
+def test_get_pair_post_model_excludes_hard_no_property_types(session):
+    """l0/l1 have the smallest raw_score gap but l0 is a Condo -- the
+    active-selection pair must skip it even though PreferenceScore rows
+    already exist for it (e.g. from before an exclusion was configured)."""
+    session.add(Rater(id="zach", display_name="Zach"))
+    session.add(_listing("l0", property_type="Condo"))
+    session.add(_listing("l1", property_type="Single Family"))
+    session.add(_listing("l2", property_type="Single Family"))
+    for i in range(3):
+        session.add(_features(f"l{i}"))
+    model_run = ModelRun(rater_id="zach", feature_set_version="v1", n_pairs=50, coefficients={}, scaler_params={})
+    session.add(model_run)
+    session.commit()
+    session.add_all([
+        PreferenceScore(listing_id="l0", model_run_id=model_run.id, raw_score=0.0, display_score=10, pred_variance=0.1),
+        PreferenceScore(listing_id="l1", model_run_id=model_run.id, raw_score=0.05, display_score=15, pred_variance=0.1),
+        PreferenceScore(listing_id="l2", model_run_id=model_run.id, raw_score=5.0, display_score=90, pred_variance=0.1),
+    ])
+    session.commit()
+
+    a, b, strategy = get_pair(session, "zach")
+
+    assert strategy == "active"
+    assert {a.id, b.id} == {"l1", "l2"}
 
 
 # ---------------------------------------------------------------------------
