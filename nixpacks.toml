@@ -1,5 +1,6 @@
 [phases.setup]
-nixPkgs = ["python3", "nodejs_20", "expat"]
+nixPkgs = ["python3", "nodejs_20"]
+aptPkgs = ["libexpat1"]
 
 [phases.frontend]
 dependsOn = ["setup"]
