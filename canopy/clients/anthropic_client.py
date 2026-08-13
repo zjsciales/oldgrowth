@@ -24,9 +24,22 @@ MODEL = "claude-sonnet-5"
 # call; it should complete in a few seconds, not minutes.
 REQUEST_TIMEOUT_SECONDS = 30.0
 
+# The SDK retries up to twice by default (3 attempts total) *inside* a
+# single .create() call, even with an explicit `timeout` set -- so a call
+# that keeps timing out can still take ~3x REQUEST_TIMEOUT_SECONDS before
+# raising. Confirmed live in production: a batch capped at 3 vision calls
+# still blew past gunicorn's 120s worker timeout because one hung call
+# alone could eat up to 90s. The caller (canopy/api.py's
+# _try_ensure_vision) already treats any exception here as non-fatal --
+# the listing just renders without vision fields -- so retrying here buys
+# nothing but unbounded latency.
+MAX_RETRIES = 0
+
 
 def _client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=REQUEST_TIMEOUT_SECONDS)
+    return anthropic.Anthropic(
+        api_key=ANTHROPIC_API_KEY, timeout=REQUEST_TIMEOUT_SECONDS, max_retries=MAX_RETRIES
+    )
 
 
 ARCH_STYLES = [

@@ -78,3 +78,23 @@ def test_client_sets_an_explicit_request_timeout(monkeypatch):
     anthropic_client._client()
 
     assert captured["timeout"] == anthropic_client.REQUEST_TIMEOUT_SECONDS
+
+
+def test_client_disables_sdk_retries(monkeypatch):
+    """The SDK retries up to twice by default *inside* a single .create()
+    call, even with an explicit timeout set -- so a hung call could still
+    take ~3x REQUEST_TIMEOUT_SECONDS before raising. Confirmed live in
+    production: this is what let a 3-call-capped batch still blow past
+    gunicorn's 120s worker timeout. The caller already treats any
+    exception here as non-fatal, so retries only add unbounded latency."""
+    captured = {}
+
+    class _FakeAnthropic:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(anthropic_client.anthropic, "Anthropic", _FakeAnthropic)
+
+    anthropic_client._client()
+
+    assert captured["max_retries"] == 0
