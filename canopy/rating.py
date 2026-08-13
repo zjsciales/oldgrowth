@@ -7,6 +7,7 @@ client instead of a script we wrote ourselves."""
 import logging
 import math
 import random
+import re
 
 from sqlalchemy.orm import Session
 
@@ -200,16 +201,36 @@ def _listings_for(session: Session, listing_ids: list[str]) -> list[Listing]:
     return [by_id[lid] for lid in listing_ids if lid in by_id]
 
 
+# Matches "7401-7429 Starlight Ln" (house-number range), "109 And 113
+# Clay St" / "636 And 644 S Third Ave" ("X And Y" combined addresses),
+# and "Lot 1-2" (multi-lot assemblage) -- verified against all 1028 real
+# ingested listings: exactly 5 matches, all genuine multi-parcel
+# listings, zero false positives. A listing spanning multiple house
+# numbers or lots isn't a single buildable homesite by definition, same
+# category of hard-no as EXCLUDED_PROPERTY_TYPES (not a soft threshold
+# to learn nuance around).
+MULTI_ADDRESS_PATTERN = re.compile(r"^\d+-\d+|\band\s+\d+|lot\s+\d+-\d+", re.IGNORECASE)
+
+
+def is_hard_excluded(property_type: str | None, formatted_address: str | None) -> bool:
+    """A listing is never a candidate at all -- not ranked low, never
+    shown -- if it's a stated hard-no property type (Condo/Apartment) or
+    an address spanning multiple house numbers/lots (not a single
+    buildable homesite). See CLAUDE.md's constraint list for why this is
+    distinct from the retired rank-vs-eliminate hard filter."""
+    if property_type in EXCLUDED_PROPERTY_TYPES:
+        return True
+    if formatted_address and MULTI_ADDRESS_PATTERN.search(formatted_address):
+        return True
+    return False
+
+
 def excluded_listing_ids(session: Session) -> set[str]:
-    """Property types that are never candidates (e.g. Condo) -- see
-    canopy/config.py's EXCLUDED_PROPERTY_TYPES. Enforced here (not just in
-    cli.py's pipeline) so listings featured/scored before an exclusion was
-    added still can't surface as rating candidates without a data
-    migration."""
-    return {
-        listing_id for (listing_id,) in
-        session.query(Listing.id).filter(Listing.property_type.in_(EXCLUDED_PROPERTY_TYPES))
-    }
+    """Enforced here (not just in cli.py's pipeline) so listings
+    featured/scored before an exclusion was added still can't surface as
+    rating candidates without a data migration."""
+    rows = session.query(Listing.id, Listing.property_type, Listing.formatted_address)
+    return {listing_id for listing_id, property_type, address in rows if is_hard_excluded(property_type, address)}
 
 
 def get_batch(session: Session, rater_id: str, n: int = 40) -> list[Listing]:

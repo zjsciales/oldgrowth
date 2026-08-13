@@ -8,9 +8,10 @@ import uuid
 from flask import Blueprint, Response, jsonify, request
 
 from canopy.clients.mapbox import MapboxError, fetch_location_map
-from canopy.db.models import Anchor, Listing, ListingFeatures, ModelRun, Tag
+from canopy.db.models import Anchor, Listing, ListingFeatures, ModelRun, Parcel, Tag
 from canopy.db.session import SessionLocal
 from canopy.features import FEATURE_SET_VERSION
+from canopy.listing_links import NHC_RECORDS_SEARCH_URL, listing_search_url, satellite_url
 from canopy.model import classify_features_from_tags
 from canopy.rating import (
     RatingValidationError,
@@ -71,11 +72,16 @@ def _listing_card(session, listing: Listing, features: ListingFeatures) -> dict:
         if anchor_id in anchors_by_id and row.drive_minutes is not None
     }
     edges = (features.extra or {}).get("edges") or DEFAULT_EDGES
+    parcel = session.query(Parcel).filter_by(listing_id=listing.id).one_or_none()
 
     return {
         "id": listing.id,
         "address": listing.formatted_address,
         "price": listing.price,
+        "searchUrl": listing_search_url(listing.formatted_address),
+        "satelliteUrl": satellite_url(listing.latitude, listing.longitude),
+        "countyRecordsUrl": NHC_RECORDS_SEARCH_URL,
+        "parcelId": parcel.parcel_id if parcel else None,
         "sqft": features.sqft,
         "beds": features.beds,
         "baths": features.baths,

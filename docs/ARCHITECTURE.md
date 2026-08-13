@@ -253,6 +253,26 @@ pass never ranks, it only describes and sanity-checks.
   breaking Vite major-version bump, deferred.
 - No auth/multi-tenancy — fine for a two-person personal tool, would need
   real hardening before any wider use.
+- **No reliable "is this land commercial/multi-home-development-scale"
+  signal exists across the whole market.** Investigated NHC's GIS
+  zoning layers (`Layers/Zoning_base/FeatureServer/3`,
+  `Thematic/PlanNHC_Zoning`) as the obvious authoritative source; found
+  live that in-city parcels return a `"CITY"` placeholder instead of a
+  real zoning code — the county's zoning layer only covers unincorporated
+  county land, not Wilmington city limits, which is most of TARGET_ZIPS.
+  A complete fix would need the City of Wilmington's own separate GIS
+  system, out of scope for now. RentCast's payload has no zoning/
+  description field either. Lot size/price alone are too uncertain to
+  hard-filter on (same failure mode as the original retired filter —
+  some legitimate large single-homesite listings exist up to ~2.5
+  acres in real data). What *is* implemented: an unambiguous, verified-
+  zero-false-positive regex catching listings whose address spans
+  multiple house numbers/lots (e.g. "7401-7429 Starlight Ln"), which by
+  definition aren't a single buildable homesite — see
+  `canopy.rating.MULTI_ADDRESS_PATTERN`. The fuzzier remaining cases
+  (single-address, huge acreage, on a commercial corridor) are a
+  candidate for a future tag (e.g. "development-scale land") feeding
+  the existing hinge-threshold learning, rather than a hard cutoff.
 
 ## Future Extensions (explicitly out of scope for now)
 - OpenStreetMap road/position features (`fronting_road_class`,

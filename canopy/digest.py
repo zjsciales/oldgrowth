@@ -3,12 +3,8 @@
 pass/fail list -- every section is ranked, never gated, per
 SCORING_MODEL.md §6's 70/20/10 top-ranked/uncertain/wildcard split.
 
-Note on links: RentCast's sale-listings response has no photo or public
-MLS-listing URL field (confirmed against their API docs), and per
-docs/CLAUDE.md we don't scrape Zillow/Redfin/Realtor.com for one. Each
-digest entry instead links to Google Maps (satellite, from lat/long) and
-New Hanover County's public tax records search (by PID) -- both real,
-working links, not guessed deep-link formats.
+Note on links: see canopy/listing_links.py for why these are plain
+search/reference links rather than scraped or guessed deep-link URLs.
 """
 
 import datetime as dt
@@ -21,10 +17,9 @@ from sqlalchemy.orm import Session
 
 from canopy.config import DIGEST_TO_EMAIL, SMTP_HOST, SMTP_PASS, SMTP_PORT, SMTP_USER
 from canopy.db.models import DigestLog, Listing, ListingFeatures, Parcel, Score
+from canopy.listing_links import NHC_RECORDS_SEARCH_URL, listing_search_url, satellite_url
 
 logger = logging.getLogger(__name__)
-
-NHC_RECORDS_SEARCH_URL = "https://tax.nhcgov.com/436/Records-Search"
 
 SECTION_TITLES = {
     "top_ranked": "Top ranked",
@@ -47,7 +42,8 @@ def _listing_row_html(session: Session, detail: dict) -> str:
     )
     score = session.query(Score).filter_by(listing_id=listing_id).one_or_none()
 
-    maps_url = f"https://www.google.com/maps/@{listing.latitude},{listing.longitude},19z/data=!3m1!1e3"
+    maps_url = satellite_url(listing.latitude, listing.longitude)
+    search_url = listing_search_url(listing.formatted_address)
     price = f"${listing.price:,.0f}" if listing.price else "price unknown"
     parcel_id = parcel.parcel_id if parcel else "unknown"
     canopy_pct = features.parcel_canopy_pct if features else None
@@ -60,6 +56,7 @@ def _listing_row_html(session: Session, detail: dict) -> str:
       <p style="margin: 0 0 8px; color: #555;">{price} &middot; {canopy_text}</p>
       <p style="margin: 0 0 8px;">{rationale}</p>
       <p style="margin: 0; font-size: 0.9em;">
+        <a href="{search_url}">Search listing (photos, details)</a> &middot;
         <a href="{maps_url}">Satellite view</a> &middot;
         <a href="{NHC_RECORDS_SEARCH_URL}">County records search</a> (PID: {parcel_id})
       </p>

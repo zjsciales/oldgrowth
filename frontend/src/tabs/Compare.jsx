@@ -50,6 +50,12 @@ export default function Compare({ rater, anchors }) {
                 {l.archStyle || "Style unclassified"} · {l.yearBuilt ?? "?"} ·{" "}
                 {l.price ? `$${(l.price / 1000).toFixed(0)}k` : "?"} · {l.lotAcres ?? "?"} ac
               </div>
+              <div style={{ fontFamily: BODY, fontSize: 12, color: C.tide, marginTop: 4 }}
+                onClick={(e) => e.stopPropagation()}>
+                <a href={l.searchUrl} target="_blank" rel="noreferrer" style={{ color: C.tide }}>
+                  Search listing
+                </a>
+              </div>
               <div className="flex flex-col gap-3 mt-4">
                 <Bar label="Canopy on the lot" value={l.parcelCanopy ?? 0} max={100} unit="%" tone={C.canopy} />
                 <Bar label="Boundary protected" value={Math.round((l.protectedRatio ?? 0) * 100)} max={100} unit="%" tone={C.tide} />

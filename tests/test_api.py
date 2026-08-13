@@ -106,6 +106,10 @@ def test_batch_returns_listing_cards(monkeypatch, session):
     assert card["parcelCanopy"] == 60
     assert card["edges"]["n"] == "water"
     assert card["drives"] == {}
+    assert "google.com/search?q=%22l1%20Test%20St%22" in card["searchUrl"]
+    assert "34.1,-77.9" in card["satelliteUrl"]
+    assert card["countyRecordsUrl"] == "https://tax.nhcgov.com/436/Records-Search"
+    assert card["parcelId"] is None
 
 
 def test_batch_caps_synchronous_vision_calls(monkeypatch, session):

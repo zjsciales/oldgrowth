@@ -19,6 +19,7 @@ from canopy.rating import (
     ensure_anchor_times,
     get_batch,
     get_pair,
+    is_hard_excluded,
     list_anchors,
     record_comparison,
     record_judgment,
@@ -228,6 +229,20 @@ def test_get_batch_post_model_orders_by_pred_variance(session):
     assert [listing.id for listing in batch] == ["l0", "l2", "l1"]
 
 
+@pytest.mark.parametrize("property_type,address,expected", [
+    ("Single Family", "3802 Appleton Way, Wilmington, NC 28412", False),
+    ("Land", "6511 Carolina Beach Rd, Wilmington, NC 28412", False),
+    ("Condo", "2940 Oleander Dr, Apt D16, Wilmington, NC 28403", True),
+    ("Apartment", "1 Anywhere St, Wilmington, NC 28403", True),
+    ("Land", "7401-7429 Starlight Ln, Wilmington, NC 28412", True),
+    ("Land", "109 And 113 Clay St, Wilmington, NC 28405", True),
+    ("Single Family", "636 And 644 S Third Ave, Kure Beach, NC 28449", True),
+    ("Land", "1203 Fort Fisher Blvd N, Lot 1-2, Kure Beach, NC 28449", True),
+])
+def test_is_hard_excluded(property_type, address, expected):
+    assert is_hard_excluded(property_type, address) is expected
+
+
 def test_get_batch_excludes_hard_no_property_types(session):
     """Condo/Apartment are a hard no, not a soft preference -- they must
     never surface as rating candidates (and therefore never trigger a
@@ -236,6 +251,27 @@ def test_get_batch_excludes_hard_no_property_types(session):
     session.add(_listing("l1", property_type="Single Family"))
     session.add(_features("l1"))
     session.add(_listing("l2", property_type="Condo"))
+    session.add(_features("l2"))
+    session.commit()
+
+    batch = get_batch(session, "zach", n=10)
+
+    assert {listing.id for listing in batch} == {"l1"}
+
+
+@pytest.mark.parametrize("address", [
+    "7401-7429 Starlight Ln, Wilmington, NC 28412",
+    "109 And 113 Clay St, Wilmington, NC 28405",
+    "1203 Fort Fisher Blvd N, Lot 1-2, Kure Beach, NC 28449",
+])
+def test_get_batch_excludes_multi_address_listings(session, address):
+    """A listing spanning multiple house numbers/lots isn't a single
+    buildable homesite -- verified against all real ingested listings
+    (5 matches, zero false positives) before wiring this up."""
+    session.add(Rater(id="zach", display_name="Zach"))
+    session.add(_listing("l1", property_type="Land"))
+    session.add(_features("l1"))
+    session.add(_listing("l2", property_type="Land", formatted_address=address))
     session.add(_features("l2"))
     session.commit()
 

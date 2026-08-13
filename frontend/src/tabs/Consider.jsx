@@ -69,6 +69,20 @@ export default function Consider({ rater, anchors }) {
           {listing.beds ?? "?"} bed, {listing.baths ?? "?"} bath ·{" "}
           {listing.sqft ? listing.sqft.toLocaleString() : "?"} sq ft
         </p>
+        <p style={{ fontFamily: BODY, fontSize: 13, color: C.tide, marginTop: 6 }}>
+          <a href={listing.searchUrl} target="_blank" rel="noreferrer" style={{ color: C.tide }}>
+            Search listing (photos, details)
+          </a>{" "}
+          ·{" "}
+          <a href={listing.satelliteUrl} target="_blank" rel="noreferrer" style={{ color: C.tide }}>
+            Satellite view
+          </a>{" "}
+          ·{" "}
+          <a href={listing.countyRecordsUrl} target="_blank" rel="noreferrer" style={{ color: C.tide }}>
+            County records
+          </a>
+          {listing.parcelId ? ` (PID: ${listing.parcelId})` : ""}
+        </p>
       </div>
 
       <div className="grid gap-5" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))" }}>

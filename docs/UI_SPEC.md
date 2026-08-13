@@ -270,3 +270,9 @@ maintained, not wired to anything.
   per-listing or adding a new paid API (Google Street View, deferred;
   see `ARCHITECTURE.md`'s Future Extensions). It's a ~1mi-radius streets
   map with a pin, giving locational context in the meantime.
+- **`ListingCard` gained `searchUrl`/`satelliteUrl`/`countyRecordsUrl`/
+  `parcelId`** — not in this doc's original contract. Same "no scraping"
+  constraint as the photo slot: `searchUrl` is a plain Google search for
+  the address (Zillow/Redfin/Realtor.com/the local MLS typically rank at
+  the top for a specific property), not a scraped or guessed deep link.
+  See `canopy/listing_links.py`.
