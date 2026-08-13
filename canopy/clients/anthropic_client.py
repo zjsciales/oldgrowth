@@ -22,7 +22,14 @@ MODEL = "claude-sonnet-5"
 # to outlast gunicorn's worker timeout on its own -- a single hung call took
 # the whole worker down in production. This is a single-image classification
 # call; it should complete in a few seconds, not minutes.
-REQUEST_TIMEOUT_SECONDS = 30.0
+#
+# 30s was still too generous: confirmed live that Railway's own edge proxy
+# times out an upstream request at ~30s regardless of gunicorn's own (much
+# longer) worker timeout, returning a synthetic 500 to the client while the
+# backend keeps working unseen. /api/batch can attempt this call while
+# building a response for a human waiting on it, so it needs real headroom
+# under that ~30s ceiling, not just under gunicorn's.
+REQUEST_TIMEOUT_SECONDS = 10.0
 
 # The SDK retries up to twice by default (3 attempts total) *inside* a
 # single .create() call, even with an explicit `timeout` set -- so a call

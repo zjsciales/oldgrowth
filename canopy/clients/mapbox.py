@@ -41,12 +41,17 @@ class MapboxError(RuntimeError):
 
 
 def fetch_satellite_image(latitude: float, longitude: float, zoom: int = DEFAULT_ZOOM) -> bytes:
+    """Called synchronously from the lazy vision pass (canopy/vision.py),
+    itself in /api/batch's request path -- so this shares that endpoint's
+    tight latency budget (see anthropic_client.REQUEST_TIMEOUT_SECONDS'
+    docstring: confirmed live that Railway's edge proxy times out an
+    upstream request at ~30s, well before gunicorn's own worker timeout)."""
     if not MAPBOX_API_KEY:
         raise MapboxError("MAPBOX_API_KEY is not set")
 
     width, height = DEFAULT_SIZE
     url = STATIC_IMAGE_URL.format(lon=longitude, lat=latitude, zoom=zoom, width=width, height=height)
-    resp = requests.get(url, params={"access_token": MAPBOX_API_KEY}, timeout=30)
+    resp = requests.get(url, params={"access_token": MAPBOX_API_KEY}, timeout=10)
     if resp.status_code != 200:
         raise MapboxError(f"Mapbox static image request failed ({resp.status_code}): {resp.text[:300]}")
     return resp.content
