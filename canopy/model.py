@@ -46,7 +46,7 @@ LISTING_FEATURES_NUMERIC_COLUMNS = [
     "canopy_age_proxy", "dist_to_arterial_m", "through_traffic_proxy",
     "front_setback_ft", "year_built", "sqft", "beds", "baths", "stories",
     "list_price", "price_per_sqft", "days_on_market", "price_cut_count",
-    "hoa_fee_monthly",
+    "hoa_fee_monthly", "avg_room_sqft",
 ]
 # Computed on the fly by canopy.features.anchor_rollups, not stored columns.
 ANCHOR_ROLLUP_NAMES = ["min_drive_beach", "min_drive_grocery", "min_drive_work", "min_drive_school", "mean_drive_social"]
@@ -56,6 +56,10 @@ BOOLEAN_FEATURES = [
     "abuts_water", "abuts_marsh_wetland", "abuts_park_public",
     "abuts_conservation_easement", "abuts_buildable_private",
     "is_cul_de_sac", "is_dead_end", "has_front_porch",
+    # Recent + clustered year_built proxy for a mass-built tract
+    # subdivision (canopy/features.py) -- eligible for detect_vetoes below,
+    # a soft/finite penalty, never a hard exclusion (docs/CLAUDE.md).
+    "is_tract_new_build",
 ]
 CATEGORICAL_FEATURES = [
     "flood_zone", "fronting_road_class", "arch_style",

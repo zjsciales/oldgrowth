@@ -92,7 +92,10 @@ def test_batch_requires_rater(monkeypatch, session):
 def test_batch_returns_listing_cards(monkeypatch, session):
     session.add(Rater(id="zach", display_name="Zach"))
     session.add(_listing("l1"))
-    session.add(_features("l1", lot_acreage=0.5, extra={"edges": {"n": "water", "e": "buildable", "s": "buildable", "w": "buildable"}}))
+    session.add(_features(
+        "l1", lot_acreage=0.5, is_tract_new_build=True,
+        extra={"edges": {"n": "water", "e": "buildable", "s": "buildable", "w": "buildable"}},
+    ))
     session.commit()
     client = _client(monkeypatch, session)
 
@@ -110,6 +113,7 @@ def test_batch_returns_listing_cards(monkeypatch, session):
     assert "34.1,-77.9" in card["satelliteUrl"]
     assert card["countyRecordsUrl"] == "https://tax.nhcgov.com/436/Records-Search"
     assert card["parcelId"] is None
+    assert card["isTractNewBuild"] is True
 
 
 def test_batch_caps_synchronous_vision_calls(monkeypatch, session):

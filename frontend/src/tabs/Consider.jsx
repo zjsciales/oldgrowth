@@ -83,6 +83,11 @@ export default function Consider({ rater, anchors }) {
           </a>
           {listing.parcelId ? ` (PID: ${listing.parcelId})` : ""}
         </p>
+        {listing.isTractNewBuild ? (
+          <p style={{ fontFamily: BODY, fontSize: 13, color: C.clay, marginTop: 6 }}>
+            Recently built and clustered with similarly new neighbors — may be part of a tract/subdivision. Worth checking listing photos before ruling it out.
+          </p>
+        ) : null}
       </div>
 
       <div className="grid gap-5" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))" }}>

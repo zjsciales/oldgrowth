@@ -161,6 +161,15 @@ class ListingFeatures(Base):
     beds: Mapped[float | None] = mapped_column(Float, nullable=True)
     baths: Mapped[float | None] = mapped_column(Float, nullable=True)
     stories: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # sqft/beds -- a crude but real proxy for room size, backs the
+    # small_rooms/spacious_rooms tags (canopy/features.py)
+    avg_room_sqft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Recent year_built clustered with nearby listings' year_built (see
+    # median_year_built_buffer below) -- a mass-built tract subdivision
+    # signature, distinct from a lone custom new-build infill. Backs the
+    # new_build tag and is eligible for canopy/model.py's veto mechanism,
+    # not a hard filter (canopy/features.py has the full reasoning).
+    is_tract_new_build: Mapped[bool | None] = mapped_column(nullable=True)
     arch_style: Mapped[str | None] = mapped_column(String, nullable=True)
     arch_style_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     exterior_material: Mapped[str | None] = mapped_column(String, nullable=True)

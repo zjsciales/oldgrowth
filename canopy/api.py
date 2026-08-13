@@ -96,6 +96,7 @@ def _listing_card(session, listing: Listing, features: ListingFeatures) -> dict:
         "isCulDeSac": features.is_cul_de_sac,
         "floodZone": features.flood_zone,
         "archStyle": features.arch_style,
+        "isTractNewBuild": features.is_tract_new_build,
         "dom": features.days_on_market,
         "rearOpenFt": features.rear_open_distance_ft,
         "drives": drives,

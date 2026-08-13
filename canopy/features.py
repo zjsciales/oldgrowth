@@ -38,6 +38,16 @@ PARCEL_GEOMETRY_CRS = "ESRI:103122"
 NEIGHBORHOOD_CANOPY_BUFFER_M = 150
 YEAR_BUILT_BUFFER_FT = 500
 
+# is_tract_new_build: a lone custom-built infill and a mass-built tract
+# subdivision both have a recent year_built, but only the tract case has
+# many nearby listings sharing that same recent year (median_year_built_buffer
+# clustered tightly around it). First-pass constants, not yet spot-checked
+# against real known-tract vs. known-custom-infill addresses -- see
+# docs/CLAUDE.md's exclusion-exception note: this backs a soft veto
+# (canopy/model.py's detect_vetoes), never a hard filter.
+NEW_BUILD_RECENT_YEARS = 5
+NEW_BUILD_CLUSTER_TOLERANCE_YEARS = 3
+
 EARTH_RADIUS_FT = 20925646.325
 
 
@@ -177,6 +187,16 @@ def compute_feature_vector(session: Session, listing: Listing, parcel: Parcel | 
     if median_year is None:
         imputed.append("median_year_built_buffer")
 
+    is_tract_new_build = None
+    if listing.year_built is not None and median_year is not None:
+        current_year = dt.date.today().year
+        is_tract_new_build = (
+            (current_year - listing.year_built) <= NEW_BUILD_RECENT_YEARS
+            and abs(median_year - listing.year_built) <= NEW_BUILD_CLUSTER_TOLERANCE_YEARS
+        )
+    else:
+        imputed.append("is_tract_new_build")
+
     canopy_age_proxy = None
     if neighborhood_canopy is not None and median_year is not None:
         # composite heuristic, explicitly not ground-truth -- validate
@@ -206,6 +226,12 @@ def compute_feature_vector(session: Session, listing: Listing, parcel: Parcel | 
         imputed.append("baths")
     imputed.append("stories")  # RentCast never returns this field (verified)
 
+    avg_room_sqft = None
+    if listing.square_footage and beds:
+        avg_room_sqft = listing.square_footage / beds
+    else:
+        imputed.append("avg_room_sqft")
+
     return {
         "listing_id": listing.id,
         "feature_set_version": FEATURE_SET_VERSION,
@@ -226,11 +252,13 @@ def compute_feature_vector(session: Session, listing: Listing, parcel: Parcel | 
         "canopy_delta": canopy_delta,
         "median_year_built_buffer": median_year,
         "canopy_age_proxy": canopy_age_proxy,
+        "is_tract_new_build": is_tract_new_build,
         "year_built": listing.year_built,
         "sqft": listing.square_footage,
         "beds": beds,
         "baths": baths,
         "stories": None,
+        "avg_room_sqft": avg_room_sqft,
         "list_price": listing.price,
         "price_per_sqft": price_per_sqft,
         "days_on_market": market["days_on_market"],

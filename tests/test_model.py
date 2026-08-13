@@ -246,6 +246,27 @@ def test_detect_vetoes_flags_near_unanimous_rejection_value(session):
     assert vetoes["flood_zone"]["fraction"] == pytest.approx(0.9)
 
 
+def test_detect_vetoes_flags_is_tract_new_build(session):
+    """is_tract_new_build (canopy/features.py's tract/subdivision proxy,
+    backing the new_build tag) must be eligible for the same veto
+    mechanism as any other boolean feature -- a soft, large-but-finite
+    penalty once a rater's judgment history shows the pattern, never a
+    hard exclusion (docs/CLAUDE.md)."""
+    session.add(Rater(id="zach", display_name="Zach"))
+    for i in range(10):
+        session.add(_listing(f"l{i}"))
+    session.commit()
+    listing_ids = [f"l{i}" for i in range(10)]
+    raw_rows = [{"is_tract_new_build": True} for _ in range(9)] + [{"is_tract_new_build": False}]
+    for i in range(10):
+        record_judgment(session, rater_id="zach", listing_id=f"l{i}", mode="swipe", verdict="no", session_id=f"s{i}")
+
+    vetoes = detect_vetoes(session, "zach", raw_rows, listing_ids)
+
+    assert vetoes["is_tract_new_build"]["value"] is True
+    assert vetoes["is_tract_new_build"]["fraction"] == pytest.approx(0.9)
+
+
 def test_detect_vetoes_empty_below_n_gate(session):
     session.add(Rater(id="zach", display_name="Zach"))
     for i in range(3):
