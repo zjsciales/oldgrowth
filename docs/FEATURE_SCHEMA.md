@@ -88,7 +88,7 @@ category as well as per point.
 Derived rollups available to the model: `min_drive_beach`,
 `min_drive_grocery`, `mean_drive_social`.
 
-### 2.5 Structure & architecture — source: RentCast + Claude vision pass
+### 2.5 Structure & architecture — source: listing data (Zillow alert email) + Claude vision pass
 
 | Feature | Type | Notes |
 |---|---|---|
@@ -103,7 +103,7 @@ Derived rollups available to the model: `min_drive_beach`,
 
 The vision pass is where architecture becomes learnable instead of vibes.
 
-### 2.6 Listing & market — source: RentCast
+### 2.6 Listing & market — source: listing data (Zillow alert email)
 
 | Feature | Type |
 |---|---|

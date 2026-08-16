@@ -17,14 +17,16 @@ listings the model is least sure about, a wildcard, and a dedicated
 Nothing is ever hard-filtered out. Every listing is ranked; bad features
 cost rank, they don't eliminate a listing from consideration.
 
-> **Later pivot** (see `ARCHITECTURE.md`'s Purpose section): listings
-> ingestion moved from the RentCast API (described in decisions 1-2 below)
-> to Zillow saved-search/recommendation alert emails polled via IMAP.
-> RentCast's rows/history stay in the database as permanent historical
-> data (`source = 'rentcast'`); everything downstream of ingestion is
-> unchanged. The decisions below are preserved as the historical record of
-> why the *original* design looked the way it did, not a description of
-> current ingestion behavior.
+> **Later pivot** (see `ARCHITECTURE.md`'s Purpose section, and its
+> Appendix for full retired-design detail): listings ingestion moved from
+> the RentCast API (described in decisions 1-2 below) to Zillow
+> saved-search/recommendation alert emails polled via IMAP. RentCast's
+> rows/history stay in the database as permanent historical data
+> (`source = 'rentcast'`) but are excluded from the rating queue
+> (`canopy.rating.excluded_listing_ids`); everything downstream of
+> ingestion is unchanged. The decisions below are preserved as the
+> historical record of why the *original* design looked the way it did,
+> not a description of current ingestion behavior.
 
 ## Why
 
@@ -79,10 +81,19 @@ and API.
    `min(z_a, z_b)`, not a mean, because a listing one of you loves and the
    other hates is not a good listing.
 6. **Platform: Python/Flask + Postgres, React (Vite) for the rating UI.**
-   Currently developed and run entirely locally (Docker Compose Postgres,
-   local Flask serving the built frontend, macOS `launchd` for the weekly
-   cron) — a move to Railway, matching the original v1 design, is planned
-   next, once a production database is provisioned there.
+   Deployed on Railway (web service + two Cron Job services for
+   `run-daily`/`run-digest` + a Postgres plugin) — see README.md's Deploy
+   section. Local dev still uses Docker Compose Postgres and local Flask.
+7. **Listings data source (current): Zillow saved-search/recommendation
+   alert emails**, polled via Gmail IMAP and parsed from the email's
+   `text/plain` part — supersedes decisions 1-2 above. Chosen because
+   RentCast proved too thin (no photos, coarse coverage, a hard
+   50-call/month budget) once the rating-pivot's own bottleneck (the
+   rule-based filter) was already fixed — real MLS-backed data with
+   photos was already arriving in an inbox via Zillow's own alerts.
+   RentCast rows stay in Postgres as historical data, excluded from the
+   rating queue rather than deleted. See `ARCHITECTURE.md`'s Component 2
+   and Appendix.
 
 ## Non-goals
 
@@ -109,7 +120,7 @@ unchanged and still in use:
 | ~~4~~ | ~~Rule-based filter~~ — retired; collapsed 1025 listings to 2, see "Why" above |
 | ~~5~~ | ~~Claude sub-agent on the filtered shortlist~~ — retired; vision is now lazy, per-listing |
 | 6 | Digest delivery — retained, rebuilt around the learned ranking |
-| 7 | Deploy — retained as a goal, currently local-first (see decision 6 above) |
+| 7 | Deploy — done via Railway (see decision 6 above) |
 
 **v2 (rating & preference-learning pivot)** — see `FEATURE_SCHEMA.md`,
 `SCORING_MODEL.md`, `UI_SPEC.md` for full design:
@@ -122,9 +133,10 @@ unchanged and still in use:
 | 4 | Pairwise preference model (numpy/scipy, no scikit-learn) | Done |
 | 5 | React rating UI (Vite), wired to the real API | Done |
 | 6 | Cutover — retire the hard filter, wire the model into the weekly digest | Done |
-| 7 | Docs reorganization (this pass) | In progress |
+| 7 | Docs reorganization | Done |
+| 8 | Railway redeploy (web + `run-daily`/`run-digest` cron + Postgres plugin) | Done |
+| 9 | RentCast retirement — Zillow-alert-email ingestion cutover (`canopy/email_ingest.py`, `canopy/clients/{gmail,zillow_email}.py`); rating queue restricted to `source = 'zillow_email'` | Done |
 | — | Deferred: OpenStreetMap road/position features, real drive-time routing (currently a haversine proxy) | Not started |
-| — | Railway redeploy | Not started |
 
 ## Reference
 

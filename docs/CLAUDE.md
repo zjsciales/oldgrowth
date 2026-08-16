@@ -4,12 +4,10 @@ Read `PROJECT_SUMMARY.md` and `ARCHITECTURE.md` first for full context
 before making changes. Don't duplicate their content here — link to them.
 
 ## Stack
-Python/Flask + Postgres, React (Vite) for the rating UI. Currently
-developed and run locally (Docker Compose Postgres, local Flask serving
-the built frontend, macOS `launchd` for the weekly cron) — a Railway
-redeploy is planned next, not yet done. Don't assume Railway-specific
-infra (env vars, add-ons, scheduled jobs) exists until that migration
-actually happens.
+Python/Flask + Postgres, React (Vite) for the rating UI. Deployed on
+Railway in production (web service + `run-daily`/`run-digest` Cron Job
+services + a Postgres plugin, see README.md's Deploy section). Local dev
+uses Docker Compose Postgres and local Flask serving the built frontend.
 
 ## Conventions
 Package manager: `pip` + `requirements.txt` (backend), `npm` (frontend,
@@ -32,6 +30,13 @@ head`). See `ARCHITECTURE.md` for directory layout.
   `is_hard_excluded`'s Condo/Apartment branch doesn't fire for
   email-sourced listings today — a known, documented gap, not a bug to
   silently "fix" by guessing a property type.
+- **RentCast-sourced listings (`source = 'rentcast'`) are excluded from
+  the rating queue**, alongside the property-type/multi-address hard
+  exclusions — `canopy.rating.excluded_listing_ids` filters on
+  `source != 'zillow_email'` too. They stay in Postgres as historical
+  data (some already have real judgments against them) but can't surface
+  via `get_batch`/`get_pair`. Don't delete RentCast rows to "clean up" —
+  that's real rating history.
 - **Every listing gets a full feature vector; nothing is hard-filtered
   out.** The original rule-based filter collapsed 1025 listings to 2 and
   was retired for exactly this reason (`PROJECT_SUMMARY.md` → Why). Don't
