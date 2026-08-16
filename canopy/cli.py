@@ -12,6 +12,7 @@ from canopy.features import FEATURE_SET_VERSION, compute_features_for_listings
 from canopy.model import compute_digest_slots, fit_model
 from canopy.model import score_listings as score_preferences
 from canopy.rating import is_hard_excluded
+from canopy.rentcast_backfill import backfill_from_rentcast
 from canopy.scoring import score_listings as score_canopy
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -63,6 +64,12 @@ def run_pipeline(session, ingest_fn) -> bool:
     logger.info("=== Stage 1: ingest ===")
     changed = ingest_fn(session)
     logger.info("%d new/changed listings", len(changed))
+
+    backfilled = backfill_from_rentcast(session, changed)
+    if backfilled:
+        logger.info("%d listings collated with matching RentCast data", len(backfilled))
+    changed = list({listing.id: listing for listing in [*changed, *backfilled]}.values())
+
     changed = _excluding_hard_no(changed)
 
     enrich_backlog = _unenriched_backlog(session)
@@ -161,6 +168,26 @@ def compute_features() -> None:
         session.close()
 
 
+def backfill_rentcast() -> None:
+    """Retroactive one-off: collate every already-ingested Zillow listing
+    against RentCast's historical rows (run_pipeline only does this for
+    newly-changed listings each day; this covers everything ingested
+    before this feature existed, or a matching RentCast row that wasn't
+    findable before an address-matching improvement). Recomputes feature
+    vectors for anything that actually changed, since backfilled fields
+    (lot size, year built, market history) feed the feature vector."""
+    session = SessionLocal()
+    try:
+        changed = backfill_from_rentcast(session)
+        logger.info("%d listings collated with matching RentCast data", len(changed))
+        if changed:
+            logger.info("recomputing feature vectors for backfilled listings")
+            compute_features_for_listings(session, changed)
+        logger.info("done")
+    finally:
+        session.close()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="canopy")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -172,6 +199,10 @@ def main() -> None:
         help="Compute the digest but skip sending the email (logs the digest instead)",
     )
     subparsers.add_parser("compute-features", help="Run Stage 4 (feature vectors) standalone")
+    subparsers.add_parser(
+        "backfill-rentcast",
+        help="Collate all Zillow listings against historical RentCast rows by address, once",
+    )
 
     args = parser.parse_args()
     if args.command == "run-daily":
@@ -180,6 +211,8 @@ def main() -> None:
         run_digest(dry_run=args.dry_run)
     elif args.command == "compute-features":
         compute_features()
+    elif args.command == "backfill-rentcast":
+        backfill_rentcast()
 
 
 if __name__ == "__main__":

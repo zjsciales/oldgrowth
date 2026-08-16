@@ -116,6 +116,16 @@ export default function Consider({ rater, anchors }) {
         </div>
       </div>
 
+      {listing.satelliteUrl && (
+        <div style={{ borderRadius: 8, overflow: "hidden", border: `1px solid ${C.line}`, height: 260 }}>
+          <img
+            src={`/api/listings/${listing.id}/location-map`}
+            alt={`Map of the area around ${listing.address}`}
+            style={{ width: "100%", height: "100%", display: "block", objectFit: "cover" }}
+          />
+        </div>
+      )}
+
       <div className="grid gap-6" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))" }}>
         <Card>
           <div style={{ fontFamily: DISPLAY, fontSize: 18, color: C.ink, marginBottom: 14, fontWeight: 400 }}>
