@@ -16,12 +16,23 @@ def enrich_listings(session: Session, listings: list[Listing]) -> list[Parcel]:
     results: list[Parcel] = []
 
     for listing in listings:
-        gis_data = enrich_parcel(listing.latitude, listing.longitude)
-
         parcel = session.query(Parcel).filter_by(listing_id=listing.id).one_or_none()
         if parcel is None:
             parcel = Parcel(listing_id=listing.id)
             session.add(parcel)
+
+        if listing.latitude is None or listing.longitude is None:
+            # An email-sourced address that failed to geocode -- nothing to
+            # query GIS with. Mark enriched (so the backlog-resumption logic
+            # in cli.py doesn't retry forever) with everything else null,
+            # same "impute, never crash" pattern as canopy/features.py.
+            logger.warning("skipping GIS enrichment for %s: no coordinates", listing.id)
+            parcel.enriched_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+            session.commit()
+            results.append(parcel)
+            continue
+
+        gis_data = enrich_parcel(listing.latitude, listing.longitude)
 
         parcel.parcel_id = gis_data["parcel_id"]
         parcel.geometry_geojson = gis_data["geometry_geojson"]

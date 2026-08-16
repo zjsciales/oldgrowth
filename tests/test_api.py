@@ -6,12 +6,23 @@ from canopy.db.models import Listing, ListingFeatures, ModelRun, Rater, Tag
 
 def _listing(listing_id="l1", **overrides):
     defaults = dict(
-        id=listing_id, formatted_address=f"{listing_id} Test St", city="Wilmington",
+        id=listing_id, source="zillow_email", formatted_address=f"{listing_id} Test St", city="Wilmington",
         state="NC", zip_code="28409", latitude=34.1, longitude=-77.9, status="Active",
         price=500000, raw={},
     )
     defaults.update(overrides)
     return Listing(**defaults)
+
+
+def test_location_map_404s_for_listing_with_no_coordinates(monkeypatch, session):
+    session.add(_listing("l1", latitude=None, longitude=None))
+    session.commit()
+    monkeypatch.setattr("canopy.api.SessionLocal", lambda: session)
+    client = app.test_client()
+
+    resp = client.get("/api/listings/l1/location-map")
+
+    assert resp.status_code == 404
 
 
 def _features(listing_id="l1", **overrides):
@@ -91,7 +102,7 @@ def test_batch_requires_rater(monkeypatch, session):
 
 def test_batch_returns_listing_cards(monkeypatch, session):
     session.add(Rater(id="zach", display_name="Zach"))
-    session.add(_listing("l1"))
+    session.add(_listing("l1", photo_url="https://photos.zillowstatic.com/example.jpg"))
     session.add(_features(
         "l1", lot_acreage=0.5, is_tract_new_build=True,
         extra={"edges": {"n": "water", "e": "buildable", "s": "buildable", "w": "buildable"}},
@@ -114,6 +125,7 @@ def test_batch_returns_listing_cards(monkeypatch, session):
     assert card["countyRecordsUrl"] == "https://tax.nhcgov.com/436/Records-Search"
     assert card["parcelId"] is None
     assert card["isTractNewBuild"] is True
+    assert card["photoUrl"] == "https://photos.zillowstatic.com/example.jpg"
 
 
 def test_batch_caps_synchronous_vision_calls(monkeypatch, session):

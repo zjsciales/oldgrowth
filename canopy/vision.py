@@ -51,6 +51,12 @@ def ensure_vision_features(session: Session, listing: Listing, features: Listing
     signals; it only adds the parts that genuinely need vision."""
     if features.vision_computed_at is not None:
         return features
+    if listing.latitude is None or listing.longitude is None:
+        # No coordinates to fetch satellite imagery for (email-sourced
+        # address that never geocoded) -- leave vision fields null, same
+        # as any other imputed field, rather than crashing the batch/pair
+        # request that triggered this.
+        return features
 
     parcel = session.query(Parcel).filter_by(listing_id=listing.id).one_or_none()
     score = session.query(Score).filter_by(listing_id=listing.id).one_or_none()

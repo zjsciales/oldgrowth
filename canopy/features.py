@@ -89,11 +89,15 @@ def _median_year_built_buffer(session: Session, listing: Listing, radius_ft: flo
     GIS call. Coverage is necessarily partial (only areas we've ingested
     listings in) -- that's fine, it's imputed+flagged like anything else
     missing, never used to eliminate a listing."""
+    if listing.latitude is None or listing.longitude is None:
+        return None
     deg_pad = (radius_ft / 364000) * 1.5  # rough bounding-box prefilter before the precise haversine trim
     candidates = (
         session.query(Listing)
         .filter(Listing.id != listing.id)
         .filter(Listing.year_built.isnot(None))
+        .filter(Listing.latitude.isnot(None))
+        .filter(Listing.longitude.isnot(None))
         .filter(Listing.latitude.between(listing.latitude - deg_pad, listing.latitude + deg_pad))
         .filter(Listing.longitude.between(listing.longitude - deg_pad, listing.longitude + deg_pad))
         .all()

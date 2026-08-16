@@ -5,9 +5,10 @@
 ## Purpose
 
 A rating and preference-learning app for two people finding a house in
-Wilmington, NC. A weekly batch pipeline pulls new listings and reduces
-each one to a full feature vector — GIS/canopy/market data, deterministic,
-no AI. Two raters judge listings through a React UI (swipes, pairwise
+Wilmington, NC. A daily batch pipeline pulls new listings (from Zillow
+saved-search/recommendation alert emails, polled via IMAP) and reduces each
+one to a full feature vector — GIS/canopy/market data, deterministic, no
+AI. Two raters judge listings through a React UI (swipes, pairwise
 comparisons, optional tags); a pairwise preference model — fit separately
 per rater — turns those judgments into a ranking. A weekly digest surfaces
 the current top picks, the listings most worth rating next, a wildcard,
@@ -15,17 +16,27 @@ and where the two raters disagree. Nothing is ever hard-filtered out of
 consideration — see `PROJECT_SUMMARY.md` for why that changed from the
 original design.
 
+Listings ingestion pivoted from the RentCast API to Zillow alert emails
+(`canopy/email_ingest.py`, `canopy/clients/{gmail,zillow_email}.py`) once
+RentCast proved too thin (no photos, coarse coverage, a hard 50-call/month
+budget) to be the actual bottleneck-fixer it needed to be — real MLS-backed
+data with photos was already arriving in an inbox via Zillow's own alert
+emails. Everything downstream of ingestion (GIS enrichment, canopy scoring,
+feature vectors, the preference model, the rating UI) is unchanged in
+spirit; the pivot is the source, not the product.
+
 ## System Overview
 
-Two loops share the same database: a weekly batch pipeline that keeps
-listings and models current, and an interactive rating loop the React app
-drives over a JSON API.
+Two loops share the same database: a daily batch pipeline that keeps
+listings and models current (with the digest itself staying on its own
+weekly schedule), and an interactive rating loop the React app drives over
+a JSON API.
 
 ```
-                         WEEKLY BATCH PIPELINE
-RentCast API ──▶ Listing Ingest ──▶ Parcel/GIS Enrichment ──▶ Canopy Scoring
- (per target zip)  (dedupe, store)    (New Hanover County        (raster %
-                                        ArcGIS REST)                cover)
+                          DAILY BATCH PIPELINE (Stages 1-5)
+Zillow Alert Emails ──▶ Email Ingest ──▶ Parcel/GIS Enrichment ──▶ Canopy Scoring
+ (IMAP poll, parse)   (geocode, dedupe,     (New Hanover County        (raster %
+                          store)              ArcGIS REST)                cover)
                                               │
                                               ▼
                                   Feature Vector Computation
@@ -36,8 +47,8 @@ RentCast API ──▶ Listing Ingest ──▶ Parcel/GIS Enrichment ──▶ 
                           Preference Model Refit (per rater, separately)
                          pairwise logistic regression + tag-driven hinge
                               basis expansion (SCORING_MODEL.md)
-                                              │
-                                              ▼
+
+                          WEEKLY DIGEST (Stage 6, independent schedule)
                             Digest Slot Selection + Email
                          (top-ranked / uncertain / wildcard / disagree)
 
@@ -61,21 +72,37 @@ pass never ranks, it only describes and sanity-checks.
 ## Components
 
 ### 1. Scheduler
-- macOS `launchd` (`com.canopy.weekly.plist`), weekly, currently local.
-  A Railway scheduled job is the planned next step once a production
-  Postgres is provisioned there (see `PROJECT_SUMMARY.md` decision 6) —
-  the pipeline code itself doesn't change, only where it runs.
-- Cadence: **weekly** — matches the RentCast free-tier call budget and the
-  stated tolerance for up-to-a-week delay. Deliberate, not a placeholder.
+- Two independent Railway Cron Job services: `python -m canopy.cli
+  run-daily` (Stages 1-5) and `python -m canopy.cli run-digest` (Stage 6),
+  sharing the same Postgres/env vars as the web service.
+- Cadence: ingestion is **daily** — RentCast's call budget was the only
+  reason it was weekly, and Zillow/Mapbox/NHC GIS/NLCD raster are all
+  free/cheap at this volume. The digest stays **weekly** by design
+  (a daily email would be noise, not signal), independently schedulable
+  now that `canopy/cli.py::run_pipeline` and `run_digest` are split.
 
 ### 2. Listing Ingestion
-- **RentCast API**, `/listings/sale` endpoint.
-- One call per target zip returns all matching listings — this is what
-  makes the free tier viable.
-- Dedupe against previously seen listing IDs; only new/changed listings
-  flow downstream. A separate backlog check catches listings stuck
-  mid-pipeline from a prior crash (`canopy/cli.py::_unenriched_backlog`,
-  `_unfeatured_backlog`).
+- **Zillow saved-search / recommendation alert emails**, polled via IMAP
+  (`canopy/clients/gmail.py`) from a Gmail label a filter routes them
+  into, parsed from the email's `text/plain` MIME part
+  (`canopy/clients/zillow_email.py` — chosen over Zillow's obfuscated
+  HTML, which carries the same fields with far more fragility).
+- Dedupe primarily by `zpid` (extracted from the "View this listing" URL),
+  falling back to a normalized-address match when no zpid is recoverable;
+  see `canopy/email_ingest.py`. Field-presence-aware upsert: a parsed
+  value of `None` never overwrites a previously-known value, since an
+  alert email (e.g. a price-drop notice) doesn't necessarily restate every
+  field. `EmailIngestLog` dedupes at the email level (by Message-ID),
+  independent of per-listing dedup. A separate backlog check catches
+  listings stuck mid-pipeline from a prior crash
+  (`canopy/cli.py::_unenriched_backlog`, `_unfeatured_backlog`).
+- Zillow's alert emails don't state an explicit property-type field, so
+  the Condo/Apartment hard-exclusion (`canopy.rating.is_hard_excluded`)
+  can't fire pre-ingest for this source — a documented gap, not a bug.
+  Addresses that fail to geocode (new-construction lots, unnumbered
+  addresses) ingest with `latitude`/`longitude` left `null`; every
+  downstream stage (GIS enrichment, anchor drive times, the vision pass)
+  guards for that and imputes rather than crashing.
 
 ### 3. Parcel & GIS Enrichment
 - **New Hanover County ArcGIS REST API** (public, free, no key).

@@ -9,18 +9,30 @@ class Base(DeclarativeBase):
 
 
 class Listing(Base):
-    """One RentCast sale listing, upserted on each ingest run."""
+    """One sale listing, upserted on each ingest run. `id` is
+    source-namespaced (e.g. "zillow-<zpid>"), not a foreign system's raw
+    id, since email-sourced listings have no single canonical id the way
+    RentCast's did."""
 
     __tablename__ = "listings"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True)  # RentCast listing id
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    source: Mapped[str] = mapped_column(String, server_default="rentcast")  # 'rentcast' | 'zillow_email'
+    source_listing_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)  # e.g. zpid
     formatted_address: Mapped[str] = mapped_column(String)
+    # Lowercased/punctuation-stripped formatted_address -- the dedup
+    # fallback for email-sourced listings when no zpid is recoverable
+    # (canopy/email_ingest.py).
+    normalized_address: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     city: Mapped[str] = mapped_column(String)
     state: Mapped[str] = mapped_column(String)
-    zip_code: Mapped[str] = mapped_column(String, index=True)
+    zip_code: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     county: Mapped[str | None] = mapped_column(String, nullable=True)
-    latitude: Mapped[float] = mapped_column(Float)
-    longitude: Mapped[float] = mapped_column(Float)
+    # Nullable: an email-sourced address can fail to geocode (new-
+    # construction lot, unnumbered address) -- ingestion must not crash on
+    # that, downstream GIS/anchor/vision code guards for None instead.
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     property_type: Mapped[str | None] = mapped_column(String, nullable=True)
     lot_size_sqft: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -36,7 +48,10 @@ class Listing(Base):
     mls_name: Mapped[str | None] = mapped_column(String, nullable=True)
     mls_number: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    raw: Mapped[dict] = mapped_column(JSON)  # full RentCast payload, for reference
+    photo_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    photo_urls: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
+    raw: Mapped[dict] = mapped_column(JSON)  # full source payload, for reference
 
     first_seen: Mapped[dt.datetime] = mapped_column(DateTime, server_default=func.now())
     last_ingested: Mapped[dt.datetime] = mapped_column(
@@ -93,6 +108,25 @@ class Score(Base):
     scored_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
     listing: Mapped["Listing"] = relationship(back_populates="score")
+
+
+class EmailIngestLog(Base):
+    """Dedup at the email level -- has this Message-ID already been
+    fetched/parsed? -- independent of whether individual listing blocks
+    inside it matched an existing Listing row. `parse_errors` is per-block
+    triage detail, not a hard failure signal: a partially-parseable email
+    still records whatever listings it could extract."""
+
+    __tablename__ = "email_ingest_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    message_id: Mapped[str] = mapped_column(String, unique=True, index=True)
+    source: Mapped[str] = mapped_column(String)  # 'zillow_email'
+    received_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    listings_found: Mapped[int] = mapped_column(Integer, default=0)
+    listings_parsed_ok: Mapped[int] = mapped_column(Integer, default=0)
+    parse_errors: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    processed_at: Mapped[dt.datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class DigestLog(Base):

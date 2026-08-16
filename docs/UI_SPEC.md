@@ -264,12 +264,17 @@ maintained, not wired to anything.
   include `tagStats` (per-feature credit/blame/kind) — needed by the
   Patterns tab preview and not something `SCORING_MODEL.md`'s
   `ModelRun`/`coefficients` alone could provide.
-- **The photo slot** (§6's "photo is secondary to the plate") serves a
-  new `GET /api/listings/{id}/location-map` endpoint, not a real listing
-  photo — no current source has one without either spamming RentCast
-  per-listing or adding a new paid API (Google Street View, deferred;
-  see `ARCHITECTURE.md`'s Future Extensions). It's a ~1mi-radius streets
-  map with a pin, giving locational context in the meantime.
+- **The photo slot** (§6's "photo is secondary to the plate") shows
+  `listing.photoUrl` when present, falling back to the original
+  `GET /api/listings/{id}/location-map` endpoint (a ~0.7mi-radius streets
+  map with a pin) for older RentCast-sourced listings or the rare
+  email-sourced listing whose alert lacked a matchable photo. `photoUrl`
+  is a real Zillow-hosted CDN URL (`photos.zillowstatic.com`), hotlinked
+  directly per `canopy/listing_links.py`'s no-scraping/no-proxying
+  convention -- extracted from the alert email's `text/html` part (the
+  one field the plain-text part doesn't carry) and matched to the correct
+  listing by zpid correlation. See `canopy/clients/zillow_email.py`'s
+  module docstring for how.
 - **`ListingCard` gained `searchUrl`/`satelliteUrl`/`countyRecordsUrl`/
   `parcelId`** — not in this doc's original contract. Same "no scraping"
   constraint as the photo slot: `searchUrl` is a plain Google search for

@@ -228,9 +228,15 @@ def is_hard_excluded(property_type: str | None, formatted_address: str | None) -
 def excluded_listing_ids(session: Session) -> set[str]:
     """Enforced here (not just in cli.py's pipeline) so listings
     featured/scored before an exclusion was added still can't surface as
-    rating candidates without a data migration."""
-    rows = session.query(Listing.id, Listing.property_type, Listing.formatted_address)
-    return {listing_id for listing_id, property_type, address in rows if is_hard_excluded(property_type, address)}
+    rating candidates without a data migration. Also excludes anything not
+    sourced from the current Zillow-email ingestion pipeline -- RentCast is
+    retired, so its listings stay in the DB as history but are kept out of
+    the rating queue rather than deleted."""
+    rows = session.query(Listing.id, Listing.property_type, Listing.formatted_address, Listing.source)
+    return {
+        listing_id for listing_id, property_type, address, source in rows
+        if is_hard_excluded(property_type, address) or source != "zillow_email"
+    }
 
 
 def get_batch(session: Session, rater_id: str, n: int = 40) -> list[Listing]:
@@ -394,6 +400,11 @@ def ensure_anchor_times(session: Session, listing: Listing) -> dict[int, Listing
         row.anchor_id: row for row in
         session.query(ListingAnchorTime).filter_by(listing_id=listing.id)
     }
+    if listing.latitude is None or listing.longitude is None:
+        # email-sourced listing whose address never geocoded -- no drive
+        # times computable, same "impute, never crash" pattern as
+        # canopy/features.py.
+        return existing
     for anchor in anchors:
         if anchor.id in existing:
             continue

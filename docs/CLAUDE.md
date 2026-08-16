@@ -18,11 +18,20 @@ Vitest). Lint: `ruff check .`. Migrations: Alembic (`alembic upgrade
 head`). See `ARCHITECTURE.md` for directory layout.
 
 ## Constraints to respect
-- Do not add scraping of Zillow/Redfin/Realtor.com — RentCast is the
-  licensed listings source for this project, full stop.
-- RentCast free tier is 50 calls/month. Batch listing pulls by zip/radius
-  — never loop the sale-listings endpoint per property.
-- Weekly cadence is intentional, not a placeholder to "optimize" to daily.
+- Listings come from Zillow saved-search/recommendation alert **emails**,
+  polled via IMAP (`canopy/clients/gmail.py`) and parsed
+  (`canopy/clients/zillow_email.py`) — RentCast is fully retired. Do not
+  add scraping of Zillow/Redfin/Realtor.com's own pages; the boundary is
+  receiving your own forwarded/alerted email (fine) vs. fetching a listing
+  site's page yourself (not fine, same as before).
+- Ingestion (`run-daily`, Stages 1-5) runs **daily** now — RentCast's call
+  budget was the only reason it was weekly, and that constraint is gone.
+  The digest (`run-digest`, Stage 6) stays **weekly**; don't conflate the
+  two schedules or merge them back into one entry point.
+- Zillow's alert-email plain text has no explicit property-type field, so
+  `is_hard_excluded`'s Condo/Apartment branch doesn't fire for
+  email-sourced listings today — a known, documented gap, not a bug to
+  silently "fix" by guessing a property type.
 - **Every listing gets a full feature vector; nothing is hard-filtered
   out.** The original rule-based filter collapsed 1025 listings to 2 and
   was retired for exactly this reason (`PROJECT_SUMMARY.md` → Why). Don't
@@ -34,7 +43,7 @@ head`). See `ARCHITECTURE.md` for directory layout.
   never buy a Condo; a multi-address listing isn't a single buildable
   homesite), not a soft threshold on a continuous feature the model
   should learn nuance around. The distinction that matters: it scopes
-  the search the same way "for sale" already scopes the RentCast query,
+  the search the same way "for sale" already scopes the listing source,
   it doesn't eliminate a listing based on an uncertain guess at a
   threshold. Enforced in three places — `canopy/cli.py` skips
   GIS/feature/vision compute for excluded listings going forward,

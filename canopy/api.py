@@ -82,6 +82,7 @@ def _listing_card(session, listing: Listing, features: ListingFeatures) -> dict:
         "satelliteUrl": satellite_url(listing.latitude, listing.longitude),
         "countyRecordsUrl": NHC_RECORDS_SEARCH_URL,
         "parcelId": parcel.parcel_id if parcel else None,
+        "photoUrl": listing.photo_url,
         "sqft": features.sqft,
         "beds": features.beds,
         "baths": features.baths,
@@ -125,6 +126,8 @@ def location_map(listing_id):
         listing = session.get(Listing, listing_id)
         if listing is None:
             return jsonify(error="listing not found"), 404
+        if listing.latitude is None or listing.longitude is None:
+            return jsonify(error="location unknown for this listing"), 404
         try:
             image_bytes = fetch_location_map(listing.latitude, listing.longitude)
         except MapboxError as exc:

@@ -21,7 +21,7 @@ from canopy.rating import record_comparison, record_judgment
 
 def _listing(listing_id, **overrides):
     defaults = dict(
-        id=listing_id, formatted_address=f"{listing_id} Test St", city="Wilmington",
+        id=listing_id, source="zillow_email", formatted_address=f"{listing_id} Test St", city="Wilmington",
         state="NC", zip_code="28409", latitude=34.1, longitude=-77.9, status="Active",
         price=500000, raw={},
     )

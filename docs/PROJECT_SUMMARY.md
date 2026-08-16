@@ -17,6 +17,15 @@ listings the model is least sure about, a wildcard, and a dedicated
 Nothing is ever hard-filtered out. Every listing is ranked; bad features
 cost rank, they don't eliminate a listing from consideration.
 
+> **Later pivot** (see `ARCHITECTURE.md`'s Purpose section): listings
+> ingestion moved from the RentCast API (described in decisions 1-2 below)
+> to Zillow saved-search/recommendation alert emails polled via IMAP.
+> RentCast's rows/history stay in the database as permanent historical
+> data (`source = 'rentcast'`); everything downstream of ingestion is
+> unchanged. The decisions below are preserved as the historical record of
+> why the *original* design looked the way it did, not a description of
+> current ingestion behavior.
+
 ## Why
 
 - Manually cross-referencing Regrid, New Hanover County GIS, and satellite

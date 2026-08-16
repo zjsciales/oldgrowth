@@ -72,11 +72,16 @@ export default function Consider({ rater, anchors }) {
         <p style={{ fontFamily: BODY, fontSize: 13, color: C.tide, marginTop: 6 }}>
           <a href={listing.searchUrl} target="_blank" rel="noreferrer" style={{ color: C.tide }}>
             Search listing (photos, details)
-          </a>{" "}
-          ·{" "}
-          <a href={listing.satelliteUrl} target="_blank" rel="noreferrer" style={{ color: C.tide }}>
-            Satellite view
-          </a>{" "}
+          </a>
+          {listing.satelliteUrl && (
+            <>
+              {" "}
+              ·{" "}
+              <a href={listing.satelliteUrl} target="_blank" rel="noreferrer" style={{ color: C.tide }}>
+                Satellite view
+              </a>
+            </>
+          )}{" "}
           ·{" "}
           <a href={listing.countyRecordsUrl} target="_blank" rel="noreferrer" style={{ color: C.tide }}>
             County records
@@ -97,8 +102,8 @@ export default function Consider({ rater, anchors }) {
         <div className="flex flex-col gap-4">
           <div style={{ borderRadius: 8, overflow: "hidden", border: `1px solid ${C.line}`, minHeight: 150 }}>
             <img
-              src={`/api/listings/${listing.id}/location-map`}
-              alt={`Map of the area around ${listing.address}`}
+              src={listing.photoUrl || `/api/listings/${listing.id}/location-map`}
+              alt={listing.photoUrl ? `Photo of ${listing.address}` : `Map of the area around ${listing.address}`}
               style={{ width: "100%", height: "100%", display: "block", objectFit: "cover" }}
             />
           </div>

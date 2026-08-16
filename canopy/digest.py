@@ -49,6 +49,7 @@ def _listing_row_html(session: Session, detail: dict) -> str:
     canopy_pct = features.parcel_canopy_pct if features else None
     canopy_text = f"{canopy_pct:.0f}% canopy cover" if canopy_pct is not None else "canopy unknown"
     rationale = (score.subagent_rationale if score else None) or ""
+    maps_link = f' &middot; <a href="{maps_url}">Satellite view</a>' if maps_url else ""
 
     return f"""
     <div style="margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px solid #ddd;">
@@ -56,8 +57,7 @@ def _listing_row_html(session: Session, detail: dict) -> str:
       <p style="margin: 0 0 8px; color: #555;">{price} &middot; {canopy_text}</p>
       <p style="margin: 0 0 8px;">{rationale}</p>
       <p style="margin: 0; font-size: 0.9em;">
-        <a href="{search_url}">Search listing (photos, details)</a> &middot;
-        <a href="{maps_url}">Satellite view</a> &middot;
+        <a href="{search_url}">Search listing (photos, details)</a>{maps_link} &middot;
         <a href="{NHC_RECORDS_SEARCH_URL}">County records search</a> (PID: {parcel_id})
       </p>
     </div>

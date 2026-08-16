@@ -11,7 +11,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-cp .env.example .env   # then fill in RENTCAST_API_KEY, ANTHROPIC_API_KEY, SMTP_*
+cp .env.example .env   # then fill in ANTHROPIC_API_KEY, MAPBOX_API_KEY, SMTP_*
 
 docker compose up -d   # local Postgres on localhost:5433
 ```
@@ -31,9 +31,28 @@ source .venv/bin/activate
 PORT=5050 python -m flask --app canopy.app run   # port 5000 conflicts with macOS AirPlay Receiver
 # open http://127.0.0.1:5050 -- serves the built React app + /api/*, health check at /healthz
 
-python -m canopy.cli run-weekly --dry-run   # dry-run: skips sending email, logs digest HTML instead
-python -m canopy.cli run-weekly             # live run: ingest, enrich, score, compute features, refit both raters' models, email digest
+python -m canopy.cli run-daily              # Stages 1-5: poll Gmail for Zillow alerts, enrich, score, compute features, refit both raters' models
+python -m canopy.cli run-digest --dry-run   # Stage 6, dry-run: skips sending email, logs digest HTML instead
+python -m canopy.cli run-digest             # Stage 6, live: emails the weekly digest from whatever's already accumulated
 ```
+
+`run-daily` and `run-digest` are independently schedulable (see Deploy below) -- ingestion runs daily now that RentCast's call budget is no longer a constraint, but the digest itself stays weekly.
+
+### Gmail setup for Zillow alert ingestion
+
+1. Sign up for a Zillow saved search (or "homes we think you'll love"
+   recommendations) using the Gmail address in `SMTP_USER`.
+2. In Gmail, create a filter matching mail from `*@mail.zillow.com` (or
+   scope it to the specific saved-search subject) that applies the label
+   set in `GMAIL_IMAP_LABEL` (default `canopy-listings`) and skips the
+   inbox if you don't want to see them there too.
+3. Make sure IMAP is enabled for the account (Gmail Settings → Forwarding
+   and POP/IMAP → Enable IMAP) and that `SMTP_PASS` is an App Password
+   (same one already used for digest sending) -- `canopy/clients/gmail.py`
+   reuses `SMTP_USER`/`SMTP_PASS` for IMAP login.
+4. `canopy/clients/gmail.py` tracks what it's already ingested with a
+   custom IMAP flag, not Gmail's `\Seen` flag, so reading an alert on your
+   phone never stops ingestion.
 
 For active frontend iteration, run `flask run --port 5000` (no PORT
 override — `frontend/vite.config.js`'s dev proxy targets `127.0.0.1:5000`
@@ -60,25 +79,24 @@ returned correctly) before trusting it to Railway.
 2. `railway add` a Postgres plugin — Railway injects `DATABASE_URL` automatically;
    `canopy/config.py` reads it, overriding the local-dev default.
 3. Set the remaining env vars from `.env.example` in the Railway dashboard
-   (`RENTCAST_API_KEY`, `ANTHROPIC_API_KEY`, `MAPBOX_API_KEY`, `SMTP_*`,
-   `DIGEST_TO_EMAIL`, `TARGET_ZIPS`). Do **not** set `DATABASE_URL` yourself —
-   Railway's Postgres plugin already provides it.
+   (`ANTHROPIC_API_KEY`, `MAPBOX_API_KEY`, `SMTP_*`, `DIGEST_TO_EMAIL`,
+   `GMAIL_IMAP_LABEL`). Do **not** set `DATABASE_URL` yourself — Railway's
+   Postgres plugin already provides it.
 4. `railway up` to deploy. `railway.json`'s `preDeployCommand` runs
    `alembic upgrade head` before each deploy; the web process
    (`gunicorn canopy.app:app`, per `Procfile`) serves `/healthz` so Railway
    has something to health-check.
-5. Add a second Railway service for the weekly job: same repo/image, but as
-   a **Cron Job** service (Railway dashboard → New → Cron Job) with start
-   command `python -m canopy.cli run-weekly` and a weekly schedule (e.g.
-   `0 13 * * 1` for Monday 9am ET). Cron services share the same env vars
-   and Postgres as the web service when attached to the same project.
-6. Before trusting the cron: trigger the cron service manually once from
-   the Railway dashboard and confirm a digest email arrives, then monitor
-   the first couple of scheduled runs.
-7. This first deploy is also intentionally where the full 1023-listing
-   backlog (`compute-features` etc.) should run for real, once the
-   Postgres plugin is set up — not locally first (standing decision, see
-   `docs/ARCHITECTURE.md`).
+5. Add two more Railway services, both as **Cron Job** services (Railway
+   dashboard → New → Cron Job), sharing the same repo/image, env vars, and
+   Postgres as the web service:
+   - `python -m canopy.cli run-daily` on a daily schedule (e.g. `0 12 * * *`
+     for 8am ET) -- Stages 1-5.
+   - `python -m canopy.cli run-digest` on a weekly schedule (e.g.
+     `0 13 * * 1` for Monday 9am ET) -- Stage 6 only.
+6. Before trusting either cron: trigger each service manually once from
+   the Railway dashboard (confirm new listings land with `source =
+   'zillow_email'` for the daily job, and a digest email arrives for the
+   weekly job), then monitor the first couple of scheduled runs.
 
 ## Tests
 
@@ -87,5 +105,7 @@ pytest
 ```
 
 Tests run against recorded fixtures in `tests/fixtures/` — never against
-live RentCast/ArcGIS/Anthropic APIs (RentCast's free tier is capped at
-50 calls/month).
+live Gmail/ArcGIS/Anthropic APIs. `tests/fixtures/zillow_alert_*.eml` are
+real (personally-received) Zillow alert emails, used to test
+`canopy/clients/zillow_email.py`'s parser against real markup rather than
+a hand-constructed guess.

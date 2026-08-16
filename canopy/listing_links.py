@@ -12,7 +12,9 @@ import urllib.parse
 NHC_RECORDS_SEARCH_URL = "https://tax.nhcgov.com/436/Records-Search"
 
 
-def satellite_url(latitude: float, longitude: float) -> str:
+def satellite_url(latitude: float | None, longitude: float | None) -> str | None:
+    if latitude is None or longitude is None:
+        return None
     return f"https://www.google.com/maps/@{latitude},{longitude},19z/data=!3m1!1e3"
 
 
