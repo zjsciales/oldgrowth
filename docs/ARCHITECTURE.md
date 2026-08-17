@@ -202,9 +202,23 @@ pass never ranks, it only describes and sanity-checks.
   `Listing` rows (no NHC layer exposes year-built — checked live), and
   anchor proximity rollups (`min_drive_beach` etc.) are computed on the
   fly from `ListingAnchorTime`, not persisted as columns.
-- Road/position features (`fronting_road_class`, `dist_to_arterial_m`,
-  etc.) are reserved columns, not yet populated — OpenStreetMap
-  integration is deferred (see Known Limitations).
+- `fronting_road_class` is populated from New Hanover County's own Roads
+  layer (`RDCLASS` field, `canopy/clients/nhc_gis.py`'s
+  `RDCLASS_TO_ROAD_CLASS`) — not OSM. The rest of the road/position group
+  (`dist_to_arterial_m`, `is_cul_de_sac`, `is_dead_end`,
+  `through_traffic_proxy`, `front_setback_ft`) remain reserved, unpopulated
+  columns — OpenStreetMap integration is still deferred for those (see
+  Known Limitations).
+- **Real parcel outline + road geometry for `ParcelPlate`**
+  (`ListingFeatures.extra["parcel_outline"]`/`["road_edges"]`, computed by
+  `canopy/clients/nhc_gis.py::simplify_parcel_outline_ft` and the
+  road-capture logic inside `compute_boundary_features`): a simplified,
+  centroid-relative, foot-rounded version of the real county parcel
+  polygon, plus per-compass-side real road centerline geometry/name/class
+  for whichever sides actually front a road. Lets the rating UI draw the
+  lot's true shape and the real street(s) it sits on instead of a
+  placeholder rectangle and flat compass bands — see Component 8 and
+  `docs/UI_SPEC.md`'s revised §5.
 
 ### 7. Lazy Vision Pass (`canopy/vision.py`)
 - Runs **once per listing, on first view** (triggered by `GET
@@ -323,6 +337,33 @@ pass never ranks, it only describes and sanity-checks.
 
 ## Known Limitations / Open Risks
 
+- **New Hanover County's Roads layer essentially never registers a
+  parcel's "road" edge in practice** (found live, 2026-08-17, while
+  wiring up real road-edge geometry for `ParcelPlate`): checked across
+  every listing with cached `edges` data (116 rows) and a separate random
+  sample of enriched parcels — 0/116 have ever had `edges` classify any
+  compass side as `"road"`. Root cause: `BOUNDARY_TOUCH_FT = 5` (a
+  5ft "digitizing-gap allowance," appropriate for adjacent *polygon*
+  features like parks/water/easements, which should share almost the
+  same boundary line) is the same tolerance used for road *centerlines*,
+  which are inherently offset from the property line by roughly half a
+  street's right-of-way width (often 15-30+ft for a residential street)
+  — not a digitizing error, a real physical gap. This isn't a new
+  regression — `compute_boundary_features`'s road-touch logic predates
+  the parcel-outline/road-geometry work and always used this tolerance;
+  it just never surfaced as a visible problem until real road-edge
+  rendering made the "we never actually detect roads" fact obvious. Real
+  road name/classification data genuinely exists and is correctly
+  captured wherever a road-touch *does* register (tested against real
+  live county data — see `tests/test_nhc_gis.py`'s
+  `test_compute_boundary_features_captures_real_road_edge_geometry`); the
+  gap is purely in the touch-distance threshold. A fix (a separate, larger
+  tolerance specifically for road-touch detection, distinct from
+  `BOUNDARY_TOUCH_FT`) is a reasonable follow-up but touches
+  `protected_perimeter_ratio`/`abuts_buildable_private` — real,
+  already-used ranking inputs with judgments/comparisons trained against
+  their current values — so it wasn't made unilaterally as part of this
+  change; flagged here for a deliberate follow-up decision instead.
 - No ground-truth "old growth" dataset; `canopy_age_proxy` is a heuristic,
   same caveat as the original v1 design.
 - `rear_open_distance_ft` falls back to a centroid-to-boundary proxy on
@@ -395,9 +436,11 @@ pass never ranks, it only describes and sanity-checks.
   the existing hinge-threshold learning, rather than a hard cutoff.
 
 ## Future Extensions (explicitly out of scope for now)
-- OpenStreetMap road/position features (`fronting_road_class`,
-  `dist_to_arterial_m`, cul-de-sac/dead-end detection, through-traffic
-  proxy) — reserved columns exist, not yet populated.
+- OpenStreetMap road/position features (`dist_to_arterial_m`,
+  cul-de-sac/dead-end detection, through-traffic proxy) — reserved
+  columns exist, not yet populated. `fronting_road_class` is no longer in
+  this list — it's populated from the county's own Roads layer instead
+  (see Component 6).
 - Real drive-time routing, replacing the haversine proxy.
 - Railway redeploy (see `PROJECT_SUMMARY.md` decision 6).
 - UI polish items explicitly deferred in `UI_SPEC.md` §7: free-text

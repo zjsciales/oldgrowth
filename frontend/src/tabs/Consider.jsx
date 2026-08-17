@@ -121,7 +121,11 @@ export default function Consider({ rater, anchors }) {
         </div>
       </div>
 
-      {listing.satelliteUrl && (
+      {listing.satelliteUrl && listing.photoUrl && (
+        // Only shown alongside a real photo -- without listing.photoUrl,
+        // the photo slot above already falls back to this same
+        // location-map image, so rendering it again here would just
+        // fetch/decode the identical image twice for no benefit.
         <div style={{ borderRadius: 8, overflow: "hidden", border: `1px solid ${C.line}`, height: 260 }}>
           <img
             src={`/api/listings/${listing.id}/location-map`}

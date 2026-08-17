@@ -218,6 +218,36 @@ def backfill_rentcast() -> None:
         session.close()
 
 
+def backfill_parcel_geometry() -> None:
+    """One-off: recompute feature vectors for Zillow-sourced listings that
+    already have a ListingFeatures row but predate real parcel-outline/
+    road-edge geometry (extra["parcel_outline"] missing) -- i.e. every
+    listing ingested before that shipped. Scoped to source='zillow_email'
+    only: RentCast rows never surface in the rating UI (canopy.rating.
+    excluded_listing_ids), so there's no reason to spend a live GIS call
+    refreshing their plate data. compute_boundary_features is already a
+    live call on every feature computation (not cached at Stage 2), so
+    this is just a normal Stage 4 rerun, scoped to what's actually stale."""
+    session = SessionLocal()
+    try:
+        rows = (
+            session.query(ListingFeatures)
+            .filter(ListingFeatures.feature_set_version == FEATURE_SET_VERSION)
+            .all()
+        )
+        stale_ids = {row.listing_id for row in rows if not (row.extra or {}).get("parcel_outline")}
+        listings = (
+            session.query(Listing)
+            .filter(Listing.id.in_(stale_ids), Listing.source == "zillow_email")
+            .all()
+        )
+        logger.info("recomputing features for %d listings missing real parcel geometry", len(listings))
+        compute_features_for_listings(session, listings)
+        logger.info("done")
+    finally:
+        session.close()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="canopy")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -236,6 +266,10 @@ def main() -> None:
         "backfill-rentcast",
         help="Collate all Zillow listings against existing RentCast rows by address, without polling RentCast",
     )
+    subparsers.add_parser(
+        "backfill-parcel-geometry",
+        help="Recompute features for Zillow listings missing real parcel outline/road-edge geometry",
+    )
 
     args = parser.parse_args()
     if args.command == "run-daily":
@@ -248,6 +282,8 @@ def main() -> None:
         run_rentcast_weekly()
     elif args.command == "backfill-rentcast":
         backfill_rentcast()
+    elif args.command == "backfill-parcel-geometry":
+        backfill_parcel_geometry()
 
 
 if __name__ == "__main__":

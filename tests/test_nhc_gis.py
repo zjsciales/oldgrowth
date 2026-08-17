@@ -19,7 +19,9 @@ from canopy.clients.nhc_gis import (
     _esri_rings_to_polygon,
     compute_boundary_features,
     enrich_parcel,
+    map_rdclass,
     rear_open_distance_ft,
+    simplify_parcel_outline_ft,
     wetland_pct_of_parcel,
 )
 
@@ -29,6 +31,10 @@ SQUARE_PARCEL = Polygon([(0, 0), (0, 100), (100, 100), (100, 0), (0, 0)])
 
 def _polygon_feature(attrs, rings):
     return {"attributes": attrs, "geometry": {"rings": rings}}
+
+
+def _line_feature(attrs, paths):
+    return {"attributes": attrs, "geometry": {"paths": paths}}
 
 PARCEL_FIXTURE = json.loads(
     (Path(__file__).parent / "fixtures" / "nhc_gis_parcel_query.json").read_text()
@@ -244,6 +250,125 @@ def test_compute_boundary_features_fully_protected_has_no_buildable_edge():
 
     assert result["abuts_buildable_private"] is False
     assert result["protected_perimeter_ratio"] == pytest.approx(1.0, abs=0.01)
+
+
+def test_simplify_parcel_outline_ft_is_centroid_relative_and_rounded():
+    outline = simplify_parcel_outline_ft(SQUARE_PARCEL)
+
+    assert len(outline) == 4  # a clean square simplifies to its 4 corners
+    for x, y in outline:
+        assert x == int(x) and y == int(y)  # rounded to the nearest foot
+    # centroid-relative: the square's centroid is (50, 50), so corners land
+    # on +-50 around the origin
+    xs = sorted({p[0] for p in outline})
+    ys = sorted({p[1] for p in outline})
+    assert xs == [-50, 50]
+    assert ys == [-50, 50]
+
+
+def test_simplify_parcel_outline_ft_drops_near_collinear_points():
+    # a near-collinear extra vertex on the south edge, well within
+    # SIMPLIFY_TOLERANCE_FT (2.0ft) of the straight line between (0,0)
+    # and (100,0)
+    noisy = Polygon([(0, 0), (50, 0.01), (100, 0), (100, 100), (0, 100), (0, 0)])
+
+    outline = simplify_parcel_outline_ft(noisy)
+
+    assert len(outline) == 4
+
+
+@pytest.mark.parametrize("rdclass,expected", [
+    ("LOCAL", "residential"),
+    ("PRIVATE", "residential"),
+    ("NC", "tertiary"),
+    ("UC", "tertiary"),
+    ("RMJC", "secondary"),
+    ("UMA", "secondary"),
+    ("UPA", "primary"),
+    ("RPA", "primary"),
+    ("UI", "primary"),
+    ("ARX", None),
+    ("ACCESS RAMP", None),
+    ("MEDIAN CROSSING", None),
+    ("PLA", None),
+    (None, None),
+    ("", None),
+])
+def test_map_rdclass_covers_real_domain_values(rdclass, expected):
+    # every value below was confirmed live against New Hanover County's
+    # Roads layer coded-value domain (GET .../Layers/Roads/FeatureServer/0
+    # ?f=json), not guessed
+    assert map_rdclass(rdclass) == expected
+
+
+@responses.activate
+def test_compute_boundary_features_captures_real_road_edge_geometry():
+    responses.add(
+        responses.POST, f"{BASE_URL}/{ROADS_LAYER}/query",
+        json={"features": [_line_feature(
+            {"STREET": "PARKWOOD", "TYPE": "DR", "DIR": " ", "RDCLASS": "LOCAL"},
+            [[[-20, 0], [50, 0], [120, 0]]],
+        )]}, status=200,
+    )
+    for layer in (PARKS_LAYER, EASEMENTS_LAYER, COUNTY_PROPERTIES_LAYER, WETLANDS_LAYER):
+        _empty_geom(layer)
+
+    result = compute_boundary_features(SQUARE_PARCEL)
+
+    assert result["edges"]["s"] == "road"
+    road = result["road_edges"]["s"]
+    assert road["road_class"] == "residential"
+    assert road["street_name"] == "Parkwood Dr"
+    assert len(road["path"]) >= 2
+
+
+@responses.activate
+def test_compute_boundary_features_corner_lot_captures_both_road_edges():
+    responses.add(
+        responses.POST, f"{BASE_URL}/{ROADS_LAYER}/query",
+        json={"features": [
+            _line_feature(
+                {"STREET": "PARKWOOD", "TYPE": "DR", "DIR": " ", "RDCLASS": "LOCAL"},
+                [[[-20, 0], [50, 0], [120, 0]]],
+            ),
+            _line_feature(
+                {"STREET": "OLEANDER", "TYPE": "AVE", "DIR": " ", "RDCLASS": "UPA"},
+                [[[100, -20], [100, 50], [100, 120]]],
+            ),
+        ]}, status=200,
+    )
+    for layer in (PARKS_LAYER, EASEMENTS_LAYER, COUNTY_PROPERTIES_LAYER, WETLANDS_LAYER):
+        _empty_geom(layer)
+
+    result = compute_boundary_features(SQUARE_PARCEL)
+
+    assert result["edges"]["s"] == "road"
+    assert result["edges"]["e"] == "road"
+    assert result["road_edges"]["s"]["street_name"] == "Parkwood Dr"
+    assert result["road_edges"]["s"]["road_class"] == "residential"
+    assert result["road_edges"]["e"]["street_name"] == "Oleander Ave"
+    assert result["road_edges"]["e"]["road_class"] == "primary"
+
+
+@responses.activate
+def test_compute_boundary_features_blank_street_name_is_none():
+    # ramp/median-crossing segments carry an empty or non-street STREET
+    # value ("", "XING") -- confirmed live -- both should read as "no
+    # real street name" rather than a misleading label
+    responses.add(
+        responses.POST, f"{BASE_URL}/{ROADS_LAYER}/query",
+        json={"features": [_line_feature(
+            {"STREET": "XING", "TYPE": " ", "DIR": " ", "RDCLASS": "UPA"},
+            [[[-20, 0], [120, 0]]],
+        )]}, status=200,
+    )
+    for layer in (PARKS_LAYER, EASEMENTS_LAYER, COUNTY_PROPERTIES_LAYER, WETLANDS_LAYER):
+        _empty_geom(layer)
+
+    result = compute_boundary_features(SQUARE_PARCEL)
+
+    assert result["road_edges"]["s"]["street_name"] is None
+    assert result["road_edges"]["s"]["road_class"] == "primary"
 
 
 @responses.activate

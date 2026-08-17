@@ -10,7 +10,61 @@ import { C, EDGE_META, NUM } from "../theme.js";
    pairwise training data (UI_SPEC.md §2.3). SVG <defs> IDs are
    namespaced per listing so two plates can render side by side in
    Compare without colliding.
+
+   Real geometry (2026-08-17): when the API sends `parcelOutline`/
+   `roadEdges` (canopy/clients/nhc_gis.py -- simplified, centroid-relative,
+   foot-rounded county GIS data), the lot is drawn as its true shape and
+   fronting roads as their real centerline curvature/name/class, instead
+   of a placeholder rectangle and flat compass bands. Both are pure
+   functions of already-fetched listing data -- no new randomness, so
+   determinism is unaffected. Older/un-reprocessed listings without this
+   data fall back to the original rectangle/flat-band rendering exactly.
    ============================================================ */
+
+const ROAD_CLASS_LABELS = {
+  residential: "residential",
+  tertiary: "collector",
+  secondary: "minor arterial",
+  primary: "major road",
+};
+
+/* Fits a set of [x,y] feet-space points (centroid-relative, y growing
+   north like real-world coordinates) into a target screen rect, uniform
+   scale, centered, with a small margin. Flips y (north -> top of the
+   rect) since SVG y grows downward. Pure/deterministic -- same input
+   always produces the same output. */
+function fitPoints(points, box, margin = 0.92) {
+  const xs = points.map((p) => p[0]), ys = points.map((p) => p[1]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const spanX = Math.max(maxX - minX, 1), spanY = Math.max(maxY - minY, 1);
+  const scale = Math.min(box.w / spanX, box.h / spanY) * margin;
+  const outW = spanX * scale, outH = spanY * scale;
+  const offX = box.x + (box.w - outW) / 2;
+  const offY = box.y + (box.h - outH) / 2;
+  return {
+    points: points.map(([x, y]) => [offX + (x - minX) * scale, offY + (maxY - y) * scale]),
+    scale,
+  };
+}
+
+function toPathD(points, close) {
+  const d = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ");
+  return close ? `${d} Z` : d;
+}
+
+// Shoelace formula, screen-space -- used only to correct the canopy
+// coverage-density formula for a non-rectangular lot (see lotCrowns
+// below), not for anything geometrically load-bearing.
+function polygonArea(points) {
+  let sum = 0;
+  for (let i = 0; i < points.length; i++) {
+    const [x1, y1] = points[i];
+    const [x2, y2] = points[(i + 1) % points.length];
+    sum += x1 * y2 - x2 * y1;
+  }
+  return Math.abs(sum) / 2;
+}
 
 export default function ParcelPlate({ listing, w = 420, h = 360 }) {
   const uid = `p${listing.id.replace(/[^a-zA-Z0-9]/g, "")}`;
@@ -20,13 +74,32 @@ export default function ParcelPlate({ listing, w = 420, h = 360 }) {
   const seed = listing.id.split("").reduce((a, c) => a + c.charCodeAt(0), 7);
   const mk = (s0) => { let s = s0; return () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff); };
 
+  // Real outline, fit into the same interior budget the placeholder rect
+  // used to occupy. Falls back to that exact rect when no real geometry
+  // is available (older listings, or geometry-free parcels).
+  const hasOutline = Array.isArray(listing.parcelOutline) && listing.parcelOutline.length >= 3;
+  let lotPoints = null, lotRegion = { x: lx, y: ly, w: lw, h: lh }, lotAreaOverride = null;
+  if (hasOutline) {
+    const fitted = fitPoints(listing.parcelOutline, { x: lx, y: ly, w: lw, h: lh });
+    lotPoints = fitted.points;
+    const xs = lotPoints.map((p) => p[0]), ys = lotPoints.map((p) => p[1]);
+    lotRegion = { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+    // Coverage % should read against the real lot area, not its bounding
+    // box -- an irregular lot's crowns would otherwise look sparse near
+    // clipped corners. Circles still scatter uniformly across the bbox
+    // (some get clipped away); this just tells the count formula the
+    // true target area so the *visible* density still matches the %.
+    lotAreaOverride = polygonArea(lotPoints);
+  }
+  const lotPathD = lotPoints ? toPathD(lotPoints, true) : null;
+
   /* Canopy coverage: for randomly placed crowns of area a over region A,
      expected coverage c = 1 - exp(-n*a/A)  →  n = -ln(1-c) * A/a.
      Self-corrects for overlap, so 74% actually reads as 74%. */
-  const crowns = (cov, region, radius, rnd) => {
+  const crowns = (cov, region, radius, rnd, areaOverride) => {
     const c = Math.min(0.95, Math.max(0, cov / 100));
     const a = Math.PI * radius * radius;
-    const A = region.w * region.h;
+    const A = areaOverride ?? (region.w * region.h);
     const n = Math.max(0, Math.ceil((-Math.log(1 - c) * A) / a));
     return Array.from({ length: n }, () => ({
       x: region.x + rnd() * region.w,
@@ -36,14 +109,14 @@ export default function ParcelPlate({ listing, w = 420, h = 360 }) {
   };
 
   const rnd = mk(seed);
-  const lotCrowns = crowns(listing.parcelCanopy, { x: lx, y: ly, w: lw, h: lh }, lw * 0.085, rnd);
+  const lotCrowns = crowns(listing.parcelCanopy, lotRegion, lw * 0.085, rnd, lotAreaOverride);
   const hoodCrowns = crowns(
     Math.min(listing.neighborhoodCanopy * 0.55, 55),
     { x: 0, y: 0, w, h }, lw * 0.07, mk(seed + 31)
   );
 
-  const houseW = lw * 0.34, houseH = lh * 0.24;
-  const houseX = lx + lw / 2 - houseW / 2, houseY = ly + lh - houseH - lh * 0.12;
+  const houseW = lotRegion.w * 0.34, houseH = lotRegion.h * 0.24;
+  const houseX = lotRegion.x + lotRegion.w / 2 - houseW / 2, houseY = lotRegion.y + lotRegion.h - houseH - lotRegion.h * 0.12;
 
   const edges = {
     n: { x: lx, y: 0, w: lw, h: band },
@@ -51,6 +124,13 @@ export default function ParcelPlate({ listing, w = 420, h = 360 }) {
     w: { x: 0, y: ly, w: band, h: lh },
     e: { x: w - band, y: ly, w: band, h: lh },
   };
+
+  function roadLabel(side) {
+    const info = listing.roadEdges?.[side];
+    if (!info) return EDGE_META.road.label;
+    const parts = [info.streetName, info.roadClass ? ROAD_CLASS_LABELS[info.roadClass] : null].filter(Boolean);
+    return parts.length ? parts.join(" · ") : EDGE_META.road.label;
+  }
 
   function EdgeBand({ side, type }) {
     const r = edges[side];
@@ -119,14 +199,21 @@ export default function ParcelPlate({ listing, w = 420, h = 360 }) {
     }
 
     if (type === "road") {
+      const roadInfo = listing.roadEdges?.[side];
+      const realPath = roadInfo?.path?.length >= 2 ? fitPoints(roadInfo.path, r, 0.86).points : null;
       const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
       return (
         <g>
           <rect x={r.x} y={r.y} width={r.w} height={r.h} fill="#E4E7E4" />
-          <line
-            x1={horiz ? r.x : cx} y1={horiz ? cy : r.y}
-            x2={horiz ? r.x + r.w : cx} y2={horiz ? cy : r.y + r.h}
-            stroke={C.slate} strokeWidth="1.4" strokeDasharray="9 9" opacity="0.85" />
+          {realPath ? (
+            <path d={toPathD(realPath, false)} fill="none"
+              stroke={C.slate} strokeWidth="1.6" strokeDasharray="9 9" opacity="0.85" strokeLinecap="round" />
+          ) : (
+            <line
+              x1={horiz ? r.x : cx} y1={horiz ? cy : r.y}
+              x2={horiz ? r.x + r.w : cx} y2={horiz ? cy : r.y + r.h}
+              stroke={C.slate} strokeWidth="1.4" strokeDasharray="9 9" opacity="0.85" />
+          )}
         </g>
       );
     }
@@ -164,7 +251,7 @@ export default function ParcelPlate({ listing, w = 420, h = 360 }) {
           <line x1="0" y1="0" x2="0" y2="7" stroke={C.slate} strokeWidth="1" opacity="0.4" />
         </pattern>
         <clipPath id={`${uid}-lot`}>
-          <rect x={lx} y={ly} width={lw} height={lh} rx="3" />
+          {lotPathD ? <path d={lotPathD} /> : <rect x={lx} y={ly} width={lw} height={lh} rx="3" />}
         </clipPath>
         <filter id={`${uid}-soft`} x="-20%" y="-20%" width="140%" height="140%">
           <feGaussianBlur stdDeviation="2.2" />
@@ -181,7 +268,9 @@ export default function ParcelPlate({ listing, w = 420, h = 360 }) {
         <EdgeBand key={side} side={side} type={type} />
       ))}
 
-      <rect x={lx} y={ly} width={lw} height={lh} rx="3" fill="#F4F7F1" />
+      {lotPathD
+        ? <path d={lotPathD} fill="#F4F7F1" />
+        : <rect x={lx} y={ly} width={lw} height={lh} rx="3" fill="#F4F7F1" />}
 
       <g clipPath={`url(#${uid}-lot)`}>
         <g filter={`url(#${uid}-soft)`} opacity="0.62">
@@ -197,8 +286,9 @@ export default function ParcelPlate({ listing, w = 420, h = 360 }) {
       <line x1={houseX} y1={houseY + houseH * 0.42} x2={houseX + houseW} y2={houseY + houseH * 0.42}
         stroke={C.ink} strokeWidth="0.9" opacity="0.45" />
 
-      <rect x={lx} y={ly} width={lw} height={lh} rx="3"
-        fill="none" stroke={C.ink} strokeWidth="1.1" opacity="0.5" strokeDasharray="3 3" />
+      {lotPathD
+        ? <path d={lotPathD} fill="none" stroke={C.ink} strokeWidth="1.1" opacity="0.5" strokeDasharray="3 3" />
+        : <rect x={lx} y={ly} width={lw} height={lh} rx="3" fill="none" stroke={C.ink} strokeWidth="1.1" opacity="0.5" strokeDasharray="3 3" />}
 
       {Object.entries(listing.edges).map(([side, type]) => {
         const r = edges[side];
@@ -209,7 +299,7 @@ export default function ParcelPlate({ listing, w = 420, h = 360 }) {
             y={horiz ? r.y + (side === "n" ? 13 : r.h - 5) : r.y + 12}
             fill={C.inkSoft} fontFamily={NUM} fontSize="8.5" opacity="0.85"
             textAnchor={horiz ? "start" : "middle"}>
-            {EDGE_META[type].label}
+            {type === "road" ? roadLabel(side) : EDGE_META[type].label}
           </text>
         );
       })}

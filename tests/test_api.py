@@ -126,6 +126,40 @@ def test_batch_returns_listing_cards(monkeypatch, session):
     assert card["parcelId"] is None
     assert card["isTractNewBuild"] is True
     assert card["photoUrl"] == "https://photos.zillowstatic.com/example.jpg"
+    # "l1 Test St" -- the test fixture's synthetic address doesn't start
+    # with a real house number, so nothing is stripped; real addresses do
+    assert card["streetName"] == "l1 Test St"
+    # no parcel_outline/road_edges in this listing's extra -- must be
+    # absent/empty, not a crash, for listings enriched before this shipped
+    assert card["parcelOutline"] is None
+    assert card["roadEdges"] == {}
+
+
+def test_batch_card_includes_parcel_outline_and_road_edges(monkeypatch, session):
+    session.add(Rater(id="zach", display_name="Zach"))
+    session.add(_listing("l1", formatted_address="126 Parkwood Drive, Wilmington, NC"))
+    session.add(_features(
+        "l1", fronting_road_class="residential",
+        extra={
+            "edges": {"n": "buildable", "e": "buildable", "s": "road", "w": "buildable"},
+            "parcel_outline": [[-50, -50], [50, -50], [50, 50], [-50, 50]],
+            "road_edges": {
+                "s": {"path": [[-50, -50], [50, -50]], "road_class": "residential", "street_name": "Parkwood Dr"},
+            },
+        },
+    ))
+    session.commit()
+    client = _client(monkeypatch, session)
+
+    resp = client.get("/api/batch?rater=zach&n=5")
+
+    card = resp.get_json()["listings"][0]
+    assert card["streetName"] == "Parkwood Drive"
+    assert card["roadClass"] == "residential"
+    assert card["parcelOutline"] == [[-50, -50], [50, -50], [50, 50], [-50, 50]]
+    assert card["roadEdges"]["s"]["streetName"] == "Parkwood Dr"
+    assert card["roadEdges"]["s"]["roadClass"] == "residential"
+    assert card["roadEdges"]["s"]["path"] == [[-50, -50], [50, -50]]
 
 
 def test_batch_caps_synchronous_vision_calls(monkeypatch, session):

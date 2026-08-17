@@ -137,12 +137,27 @@ def _market_fields(listing: Listing) -> dict:
     }
 
 
+def _dominant_road_class(edges: dict | None, road_edges: dict | None) -> str | None:
+    """Among the sides whose dominant touching category is actually
+    "road" (per compute_boundary_features' `edges`), pick the
+    classification of whichever has the longest real road touch --
+    matters for corner lots where two sides can both be roads."""
+    road_sides = [side for side, kind in (edges or {}).items() if kind == "road"]
+    candidates = [road_edges[side] for side in road_sides if road_edges and side in road_edges]
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda info: info.get("touch_len_ft", 0))
+    return best.get("road_class")
+
+
 def compute_feature_vector(session: Session, listing: Listing, parcel: Parcel | None, score: Score | None) -> dict:
     imputed: list[str] = []
 
     parcel_polygon = None
     if parcel and parcel.geometry_geojson:
         parcel_polygon = shape(parcel.geometry_geojson)
+
+    parcel_outline = nhc_gis.simplify_parcel_outline_ft(parcel_polygon) if parcel_polygon is not None else None
 
     acreage, depth, width = _lot_dimensions(parcel_polygon, listing.lot_size_sqft)
     if acreage is None:
@@ -158,6 +173,16 @@ def compute_feature_vector(session: Session, listing: Listing, parcel: Parcel | 
             "protected_perimeter_ratio", "abuts_water", "abuts_marsh_wetland",
             "abuts_park_public", "abuts_conservation_easement", "abuts_buildable_private",
         ]
+
+    # Real classification from the county's own Roads layer (RDCLASS),
+    # not OSM -- see nhc_gis.RDCLASS_TO_ROAD_CLASS. dist_to_arterial_m/
+    # is_cul_de_sac/is_dead_end/through_traffic_proxy/front_setback_ft
+    # remain reserved/unpopulated pending real OSM integration
+    # (docs/FEATURE_SCHEMA.md §2.3) -- this is the one road & position
+    # field the county's data can answer on its own.
+    fronting_road_class = _dominant_road_class(boundary.get("edges"), boundary.get("road_edges"))
+    if fronting_road_class is None:
+        imputed.append("fronting_road_class")
 
     wetland_pct = nhc_gis.wetland_pct_of_parcel(parcel_polygon) if parcel_polygon is not None else None
     if wetland_pct is None:
@@ -248,6 +273,7 @@ def compute_feature_vector(session: Session, listing: Listing, parcel: Parcel | 
         "abuts_park_public": boundary.get("abuts_park_public"),
         "abuts_conservation_easement": boundary.get("abuts_conservation_easement"),
         "abuts_buildable_private": boundary.get("abuts_buildable_private"),
+        "fronting_road_class": fronting_road_class,
         "rear_open_distance_ft": rear_open,
         "wetland_pct_of_parcel": wetland_pct,
         "flood_zone": parcel.flood_zone if parcel else None,
@@ -269,10 +295,20 @@ def compute_feature_vector(session: Session, listing: Listing, parcel: Parcel | 
         "price_cut_count": market["price_cut_count"],
         "hoa_fee_monthly": market["hoa_fee_monthly"],
         "imputed_fields": imputed,
-        # dominant abutting type per compass side (n/e/s/w), cached here so
-        # the rating API can serve ListingCard.edges without a live GIS
-        # query or shipping raw geometry to the client (UI_SPEC.md §5)
-        "extra": {"edges": boundary.get("edges")} if boundary.get("edges") else {},
+        "extra": {
+            # dominant abutting type per compass side (n/e/s/w), cached here
+            # so the rating API can serve ListingCard.edges without a live
+            # GIS query (UI_SPEC.md §5)
+            **({"edges": boundary.get("edges")} if boundary.get("edges") else {}),
+            # simplified real parcel outline, centroid-relative feet --
+            # ParcelPlate draws this instead of a placeholder rectangle
+            **({"parcel_outline": parcel_outline} if parcel_outline else {}),
+            # real road centerline geometry + name/classification per
+            # touching side (nhc_gis.compute_boundary_features) --
+            # ParcelPlate draws the actual fronting street shape instead
+            # of a flat compass band
+            **({"road_edges": boundary.get("road_edges")} if boundary.get("road_edges") else {}),
+        },
     }
 
 

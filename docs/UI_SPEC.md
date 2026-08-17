@@ -190,8 +190,20 @@ Judgment payload gains anchor attribution:
 ```
 
 ListingCard adds `edges` (four compass boundaries resolved server-side to a
-dominant abutting type — don't ship raw geometry to the client),
-`rear_open_ft`, and `drives` keyed by anchor label.
+dominant abutting type), `rear_open_ft`, and `drives` keyed by anchor
+label.
+
+**Revised (2026-08-17)**: `parcelOutline` (a simplified, centroid-relative,
+foot-rounded parcel polygon — see `canopy/clients/nhc_gis.py::
+simplify_parcel_outline_ft`) and `roadEdges` (per-side real road
+centerline geometry + name + classification) are now also sent, so
+`ParcelPlate` can draw the lot's true shape and the actual fronting
+street(s) instead of a placeholder rectangle and flat compass bands. The
+original "don't ship raw geometry" line above was about the *raw* county
+polygon at absolute coordinates; the simplified, centroid-relative form
+sent now is a small, public-record-derived payload (a few hundred bytes
+per listing) — see `ARCHITECTURE.md` Component 4 for the coordinate-frame
+detail.
 
 ### Schema additions
 

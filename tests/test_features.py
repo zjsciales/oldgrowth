@@ -125,6 +125,48 @@ def test_compute_feature_vector_full_data(session, monkeypatch):
     assert "stories" in vector["imputed_fields"]  # RentCast never provides this
     assert "lot_acreage" not in vector["imputed_fields"]
     assert vector["extra"]["edges"] == {"n": "water", "e": "buildable", "s": "park", "w": "buildable"}
+    # SQUARE_PARCEL has real geometry, so a simplified outline should be
+    # computed and attached even though _patch_gis doesn't mock it
+    assert len(vector["extra"]["parcel_outline"]) == 4
+
+
+def test_compute_feature_vector_fronting_road_class_from_dominant_road_side(session, monkeypatch):
+    _patch_gis(monkeypatch, boundary={
+        "protected_perimeter_ratio": 0.0, "abuts_water": False, "abuts_marsh_wetland": False,
+        "abuts_park_public": False, "abuts_conservation_easement": False, "abuts_buildable_private": False,
+        "edges": {"n": "buildable", "e": "road", "s": "road", "w": "buildable"},
+        "road_edges": {
+            "s": {"touch_len_ft": 30.0, "path": [[-50, -50], [50, -50]], "road_class": "residential", "street_name": "Parkwood Dr"},
+            "e": {"touch_len_ft": 90.0, "path": [[50, -50], [50, 50]], "road_class": "primary", "street_name": "Oleander Ave"},
+        },
+    })
+    listing = _listing()
+    parcel = Parcel(listing_id="l1", parcel_id="R001", geometry_geojson=mapping(SQUARE_PARCEL))
+    score = Score(listing_id="l1", canopy_pct=42.0)
+    session.add_all([listing, parcel, score])
+    session.commit()
+
+    vector = compute_feature_vector(session, listing, parcel, score)
+
+    # the east side has the longer real road touch (90ft vs 30ft), so its
+    # classification wins the scalar fronting_road_class
+    assert vector["fronting_road_class"] == "primary"
+    assert vector["extra"]["road_edges"]["e"]["street_name"] == "Oleander Ave"
+    assert "fronting_road_class" not in vector["imputed_fields"]
+
+
+def test_compute_feature_vector_fronting_road_class_imputed_when_no_road_side(session, monkeypatch):
+    _patch_gis(monkeypatch)  # default boundary has no "road" edges
+    listing = _listing()
+    parcel = Parcel(listing_id="l1", parcel_id="R001", geometry_geojson=mapping(SQUARE_PARCEL))
+    score = Score(listing_id="l1", canopy_pct=42.0)
+    session.add_all([listing, parcel, score])
+    session.commit()
+
+    vector = compute_feature_vector(session, listing, parcel, score)
+
+    assert vector["fronting_road_class"] is None
+    assert "fronting_road_class" in vector["imputed_fields"]
 
 
 def test_compute_feature_vector_no_parcel_imputes_geometry_fields(session, monkeypatch):

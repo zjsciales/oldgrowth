@@ -380,9 +380,15 @@ originally designed except where noted here.
   currently a haversine-distance proxy (`is_proxy=True`), not real
   routing — real routing is deferred; see `ARCHITECTURE.md`'s Known
   Limitations.
-- **§2.3 (road & position features) is entirely deferred** — columns
-  exist on `listing_features` (reserved), but no OpenStreetMap
-  integration has been built yet.
+- **§2.3 (road & position features)**: `fronting_road_class` is now
+  populated (2026-08-17) — not from OpenStreetMap, but from New Hanover
+  County's own Roads layer `RDCLASS` field (`canopy/clients/nhc_gis.py`'s
+  `RDCLASS_TO_ROAD_CLASS`), discovered live to be a real, ready-to-use
+  road-classification source. `dist_to_arterial_m`, `is_cul_de_sac`,
+  `is_dead_end`, `through_traffic_proxy`, and `front_setback_ft` remain
+  reserved/unpopulated — the county layer answers "what kind of road,"
+  not the rest of §2.3's questions, and OSM integration is still deferred
+  for those.
 - **Structure/architecture features (§2.5)** are populated lazily, once
   per listing on first view (`canopy/vision.py`), not in the weekly bulk
   feature-computation pass — running Claude vision on the full weekly

@@ -26,6 +26,7 @@ from canopy.rating import (
     record_judgment,
     update_anchor,
 )
+from canopy.street_name import extract_street_name
 from canopy.vision import ensure_vision_features
 
 logger = logging.getLogger(__name__)
@@ -74,10 +75,12 @@ def _listing_card(session, listing: Listing, features: ListingFeatures) -> dict:
     }
     edges = (features.extra or {}).get("edges") or DEFAULT_EDGES
     parcel = session.query(Parcel).filter_by(listing_id=listing.id).one_or_none()
+    road_edges = (features.extra or {}).get("road_edges") or {}
 
     return {
         "id": listing.id,
         "address": listing.formatted_address,
+        "streetName": extract_street_name(listing.formatted_address),
         "price": listing.price,
         "searchUrl": listing_search_url(listing.formatted_address),
         "satelliteUrl": satellite_url(listing.latitude, listing.longitude),
@@ -96,7 +99,23 @@ def _listing_card(session, listing: Listing, features: ListingFeatures) -> dict:
             round(features.neighborhood_canopy_pct) if features.neighborhood_canopy_pct is not None else None
         ),
         "protectedRatio": features.protected_perimeter_ratio,
-        "roadClass": features.fronting_road_class,  # null until OSM integration (deferred)
+        # Real classification from New Hanover County's own Roads layer
+        # (RDCLASS), not OSM -- see nhc_gis.RDCLASS_TO_ROAD_CLASS.
+        "roadClass": features.fronting_road_class,
+        # Simplified real parcel outline (centroid-relative feet) and, per
+        # touching compass side, the real road centerline shape/name/class
+        # -- both from canopy/clients/nhc_gis.py, absent (not an error) for
+        # listings enriched before this shipped. ParcelPlate falls back to
+        # its placeholder rectangle/flat bands when these are missing.
+        "parcelOutline": (features.extra or {}).get("parcel_outline"),
+        "roadEdges": {
+            side: {
+                "path": info.get("path"),
+                "roadClass": info.get("road_class"),
+                "streetName": info.get("street_name"),
+            }
+            for side, info in road_edges.items()
+        },
         "isCulDeSac": features.is_cul_de_sac,
         "floodZone": features.flood_zone,
         "archStyle": features.arch_style,

@@ -68,6 +68,41 @@ BOUNDARY_TOUCH_FT = 5
 # Search radius for the nearest neighboring building footprint.
 FOOTPRINT_SEARCH_FT = 200
 
+# Simplification tolerance for the real parcel outline sent to the rating
+# UI's ParcelPlate (docs/UI_SPEC.md §2.3/§5) -- drops near-collinear
+# digitizing noise without visibly distorting the shape at plate scale.
+SIMPLIFY_TOLERANCE_FT = 2.0
+
+# How far past the parcel boundary to keep a touching road's centerline
+# geometry, for rendering a real (if short) curve/angle instead of just
+# the sliver where it grazes the parcel -- deliberately larger than
+# BOUNDARY_TOUCH_FT (a digitizing-gap allowance) since this one is a
+# "how much of this street's shape is worth drawing" choice.
+ROAD_CAPTURE_BUFFER_FT = 60
+
+# New Hanover County Roads layer's RDCLASS field is a coded-value domain,
+# confirmed live (GET .../Layers/Roads/FeatureServer/0?f=json):
+# LOCAL, PRIVATE, NC (Neighborhood Collector), RMJC (Rural Major
+# Collector), RPA (Rural Principal Arterial), UC (Urban Collector),
+# UI (Urban Interstate), UMA (Urban Minor Arterial), UPA (Urban Principal
+# Arterial), plus non-street codes (ARX/ACCESS RAMP/MEDIAN CROSSING/PLA)
+# for ramps and parking-lot access that were found live in this domain
+# but aren't a meaningful "what street does this house front"
+# classification -- deliberately left unmapped (-> None) rather than
+# guessed. Mapped onto FEATURE_SCHEMA.md §2.3's four fronting_road_class
+# categories.
+RDCLASS_TO_ROAD_CLASS = {
+    "LOCAL": "residential",
+    "PRIVATE": "residential",
+    "NC": "tertiary",
+    "UC": "tertiary",
+    "RMJC": "secondary",
+    "UMA": "secondary",
+    "UPA": "primary",
+    "RPA": "primary",
+    "UI": "primary",
+}
+
 # wetlands_fwsnwi_2025.WETLAND_TYPE values that represent actual open water
 # (river/lake/pond/estuary), as opposed to vegetated marsh/swamp classes
 # ("Freshwater Emergent Wetland", "Freshwater Forested/Shrub Wetland",
@@ -261,6 +296,45 @@ def enrich_parcel(latitude: float, longitude: float) -> dict:
     }
 
 
+def map_rdclass(rdclass: str | None) -> str | None:
+    if not rdclass:
+        return None
+    return RDCLASS_TO_ROAD_CLASS.get(rdclass.strip().upper())
+
+
+def _format_street_name(attrs: dict) -> str | None:
+    """'Holly Shelter Rd' from the Roads layer's STREET/TYPE/DIR fields --
+    confirmed live these are populated on real street segments but blank
+    or a non-street label ("XING") on connector/ramp/crossing segments;
+    both mean "no real street name here", not "unknown", so this returns
+    None rather than a misleading label."""
+    street = (attrs.get("STREET") or "").strip()
+    if not street or street.upper() == "XING":
+        return None
+    direction = (attrs.get("DIR") or "").strip()
+    road_type = (attrs.get("TYPE") or "").strip()
+    parts = [p for p in (direction, street.title(), road_type.title()) if p]
+    return " ".join(parts)
+
+
+def simplify_parcel_outline_ft(parcel_polygon: Polygon) -> list[list[int]]:
+    """Centroid-relative, foot-rounded, simplified exterior ring for the
+    rating UI's ParcelPlate. Untransformed NC State Plane feet (just
+    translated to the parcel's own centroid) -- same coordinate frame as
+    compute_boundary_features()'s edges/road_edges, so the outline and
+    the compass-side/road data stay geometrically consistent with each
+    other when rendered together. Real parcel geometry is public county
+    record; UI_SPEC.md §5's original "don't ship raw geometry" was about
+    the *raw* (unsimplified, absolute-coordinate) polygon, not this."""
+    if parcel_polygon.area == 0:
+        return []
+    simplified = parcel_polygon.simplify(SIMPLIFY_TOLERANCE_FT, preserve_topology=True)
+    cx, cy = parcel_polygon.centroid.x, parcel_polygon.centroid.y
+    coords = list(simplified.exterior.coords)[:-1]  # drop shapely's repeated closing vertex
+    points = [[round(x - cx), round(y - cy)] for x, y in coords]
+    return [p for i, p in enumerate(points) if i == 0 or p != points[i - 1]]
+
+
 def _side_of_point(x: float, y: float, minx: float, miny: float, maxx: float, maxy: float) -> str:
     """Nearest of the parcel's 4 bounding-box edges -- a coarse compass
     simplification (n/e/s/w) for the rating UI's stylized ParcelPlate,
@@ -293,6 +367,7 @@ def compute_boundary_features(parcel_polygon: Polygon) -> dict:
             "abuts_conservation_easement": False,
             "abuts_buildable_private": False,
             "edges": {"n": "buildable", "e": "buildable", "s": "buildable", "w": "buildable"},
+            "road_edges": {},
             "raw_boundary": {},
         }
 
@@ -330,6 +405,40 @@ def compute_boundary_features(parcel_polygon: Polygon) -> dict:
     marsh_len = touching_length(marsh_hits, "marsh")
     road_len = touching_length(road_hits, "road")
 
+    # Real road-centerline geometry + name/classification per touching
+    # side, for the rating UI to draw the fronting street's actual shape
+    # instead of a flat compass band (docs/UI_SPEC.md §2.2). Independent
+    # of `edges` above: a side can have a road_edges entry even if it's
+    # not that side's *dominant* touching category -- callers should gate
+    # on edges[side] == "road" before using it for the primary road
+    # treatment, same as ParcelPlate already does for every other type.
+    cx, cy = parcel_polygon.centroid.x, parcel_polygon.centroid.y
+    road_by_side: dict[str, dict] = {}
+    for hit in road_hits:
+        shape = _esri_geometry_to_shape(hit["geometry"])
+        touched = boundary.intersection(shape.buffer(BOUNDARY_TOUCH_FT))
+        touch_len = touched.length
+        if touch_len == 0:
+            continue
+        side = _side_of_point(touched.centroid.x, touched.centroid.y, minx, miny, maxx, maxy)
+        existing = road_by_side.get(side)
+        if existing is not None and existing["touch_len_ft"] >= touch_len:
+            continue  # a corner lot's two roads keep the longer-touching hit per side
+
+        capture = shape.intersection(parcel_polygon.buffer(ROAD_CAPTURE_BUFFER_FT))
+        if capture.geom_type == "MultiLineString":
+            capture = max(capture.geoms, key=lambda g: g.length) if capture.geoms else capture
+        if capture.geom_type != "LineString" or capture.is_empty:
+            continue
+
+        road_by_side[side] = {
+            "touch_len_ft": touch_len,
+            "path": [[round(x - cx), round(y - cy)] for x, y in capture.coords],
+            "road_class": map_rdclass(hit["attributes"].get("RDCLASS")),
+            "street_name": _format_street_name(hit["attributes"]),
+        }
+    road_edges = road_by_side
+
     protected_len = min(total_perimeter, park_len + conservation_len + water_len + marsh_len)
     buildable_len = max(0.0, total_perimeter - protected_len - road_len)
 
@@ -346,6 +455,7 @@ def compute_boundary_features(parcel_polygon: Polygon) -> dict:
         "abuts_conservation_easement": bool(easement_hits),
         "abuts_buildable_private": buildable_len > 0,
         "edges": edges,
+        "road_edges": road_edges,
         "raw_boundary": {
             "total_perimeter_ft": total_perimeter,
             "park_touch_ft": park_len,
