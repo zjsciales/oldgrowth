@@ -12,6 +12,25 @@ def _split_csv(raw: str) -> list[str]:
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MAPBOX_API_KEY = os.environ.get("MAPBOX_API_KEY", "")
 
+# Restored as a background-only weekly feed (canopy/cli.py::run_rentcast_weekly)
+# after RentCast was fully retired as the primary listings source -- see
+# docs/ARCHITECTURE.md's Appendix. RentCast-sourced listings never enter the
+# rating queue; this exists purely to keep canopy/rentcast_backfill.py's
+# collation data fresh.
+RENTCAST_API_KEY = os.environ.get("RENTCAST_API_KEY", "")
+
+TARGET_ZIPS = _split_csv(
+    os.environ.get("TARGET_ZIPS", "28403,28405,28409,28412,28428,28449")
+)
+
+# RentCast free tier is 50 calls/month. One call-batch per zip, run every
+# ~5 days (canopy/cli.py::run_rentcast_weekly): 6 zips x ~6 runs/month =~
+# 36 calls, comfortable headroom. Daily or every-72-hours would exceed the
+# free tier. Same constraint as before RentCast's primary-source
+# retirement, just lower stakes now that nothing downstream depends on
+# this data being complete.
+RENTCAST_MONTHLY_CALL_BUDGET = 50
+
 DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql://canopy:canopy@localhost:5433/canopy"
 )

@@ -93,6 +93,11 @@ export default function Consider({ rater, anchors }) {
             Recently built and clustered with similarly new neighbors — may be part of a tract/subdivision. Worth checking listing photos before ruling it out.
           </p>
         ) : null}
+        {listing.outOfArea ? (
+          <p style={{ fontFamily: BODY, fontSize: 13, color: C.clay, marginTop: 6 }}>
+            Outside the usual search zips — worth a second look at why this came through.
+          </p>
+        ) : null}
       </div>
 
       <div className="grid gap-5" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))" }}>
@@ -155,18 +160,20 @@ export default function Consider({ rater, anchors }) {
       </div>
 
       {!verdict ? (
-        <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))" }}>
-          <button onClick={() => setVerdict("no")} className="py-4"
-            style={{ fontFamily: DISPLAY, fontSize: 20, fontWeight: 400, color: C.clay, background: "transparent", border: `1px solid ${C.clay}`, borderRadius: 6, cursor: "pointer" }}>
-            Not for us
-          </button>
-          <button onClick={() => judge("maybe", [], [])} className="py-4"
-            style={{ fontFamily: DISPLAY, fontSize: 20, fontWeight: 400, color: C.inkSoft, background: "transparent", border: `1px solid ${C.line}`, borderRadius: 6, cursor: "pointer" }}>
-            Maybe
-          </button>
-          <button onClick={() => setVerdict("yes")} className="py-4"
-            style={{ fontFamily: DISPLAY, fontSize: 20, fontWeight: 400, color: C.card, background: C.canopyDeep, border: `1px solid ${C.canopyDeep}`, borderRadius: 6, cursor: "pointer" }}>
-            Yes, this one
+        <div className="flex flex-col gap-3">
+          <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))" }}>
+            <button onClick={() => setVerdict("no")} className="py-4"
+              style={{ fontFamily: DISPLAY, fontSize: 20, fontWeight: 400, color: C.clay, background: "transparent", border: `1px solid ${C.clay}`, borderRadius: 6, cursor: "pointer" }}>
+              Not This One
+            </button>
+            <button onClick={() => setVerdict("yes")} className="py-4"
+              style={{ fontFamily: DISPLAY, fontSize: 20, fontWeight: 400, color: C.card, background: C.canopyDeep, border: `1px solid ${C.canopyDeep}`, borderRadius: 6, cursor: "pointer" }}>
+              I Like It
+            </button>
+          </div>
+          <button onClick={() => judge("maybe", [], [])}
+            style={{ fontFamily: BODY, fontSize: 14, color: C.mist, background: "transparent", border: "none", textAlign: "center", cursor: "pointer", padding: "4px 0" }}>
+            Rate this later
           </button>
         </div>
       ) : (

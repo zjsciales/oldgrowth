@@ -18,15 +18,19 @@ Nothing is ever hard-filtered out. Every listing is ranked; bad features
 cost rank, they don't eliminate a listing from consideration.
 
 > **Later pivot** (see `ARCHITECTURE.md`'s Purpose section, and its
-> Appendix for full retired-design detail): listings ingestion moved from
-> the RentCast API (described in decisions 1-2 below) to Zillow
-> saved-search/recommendation alert emails polled via IMAP. RentCast's
-> rows/history stay in the database as permanent historical data
-> (`source = 'rentcast'`) but are excluded from the rating queue
-> (`canopy.rating.excluded_listing_ids`); everything downstream of
-> ingestion is unchanged. The decisions below are preserved as the
-> historical record of why the *original* design looked the way it did,
-> not a description of current ingestion behavior.
+> Appendix for full "RentCast's Role Over Time" detail): listings
+> ingestion moved from the RentCast API (described in decisions 1-2
+> below) to Zillow saved-search/recommendation alert emails polled via
+> IMAP. RentCast rows/history stay in the database as permanent
+> historical data (`source = 'rentcast'`) and are excluded from the
+> rating queue (`canopy.rating.excluded_listing_ids`); everything
+> downstream of ingestion is unchanged. **RentCast was later restored** as
+> a background-only weekly-ish feed (`canopy/ingest.py`,
+> `canopy/clients/rentcast.py`) — not to supply rating candidates again,
+> but to keep `canopy/rentcast_backfill.py`'s address-matched collation
+> data fresh (decision 7 below). The decisions immediately below are
+> preserved as the historical record of why the *original* design looked
+> the way it did, not a description of current ingestion behavior.
 
 ## Why
 
@@ -81,9 +85,10 @@ and API.
    `min(z_a, z_b)`, not a mean, because a listing one of you loves and the
    other hates is not a good listing.
 6. **Platform: Python/Flask + Postgres, React (Vite) for the rating UI.**
-   Deployed on Railway (web service + two Cron Job services for
-   `run-daily`/`run-digest` + a Postgres plugin) — see README.md's Deploy
-   section. Local dev still uses Docker Compose Postgres and local Flask.
+   Deployed on Railway (web service + three Cron Job services for
+   `run-daily`/`run-digest`/`run-rentcast` + a Postgres plugin) — see
+   README.md's Deploy section. Local dev still uses Docker Compose
+   Postgres and local Flask.
 7. **Listings data source (current): Zillow saved-search/recommendation
    alert emails**, polled via Gmail IMAP and parsed from the email's
    `text/plain` part — supersedes decisions 1-2 above. Chosen because
@@ -92,8 +97,14 @@ and API.
    rule-based filter) was already fixed — real MLS-backed data with
    photos was already arriving in an inbox via Zillow's own alerts.
    RentCast rows stay in Postgres as historical data, excluded from the
-   rating queue rather than deleted. See `ARCHITECTURE.md`'s Component 2
-   and Appendix.
+   rating queue rather than deleted. **RentCast was subsequently restored
+   as a background-only feed** (`canopy/ingest.py`, every ~5 days) purely
+   to keep that historical data fresh enough for
+   `canopy/rentcast_backfill.py` to match it against new Zillow listings
+   and fill in fields the alert emails don't carry (lot size, year built,
+   property type, MLS info) — collated listings surface first in the
+   rating queue (`Listing.collated_with_rentcast`). See
+   `ARCHITECTURE.md`'s Component 2/3 and Appendix.
 
 ## Non-goals
 
@@ -136,6 +147,7 @@ unchanged and still in use:
 | 7 | Docs reorganization | Done |
 | 8 | Railway redeploy (web + `run-daily`/`run-digest` cron + Postgres plugin) | Done |
 | 9 | RentCast retirement — Zillow-alert-email ingestion cutover (`canopy/email_ingest.py`, `canopy/clients/{gmail,zillow_email}.py`); rating queue restricted to `source = 'zillow_email'` | Done |
+| 10 | RentCast restored as a background collation feed (`canopy/ingest.py`, `canopy/rentcast_backfill.py`); `run-rentcast` cron; out-of-`TARGET_ZIPS` flagging | Done |
 | — | Deferred: OpenStreetMap road/position features, real drive-time routing (currently a haversine proxy) | Not started |
 
 ## Reference

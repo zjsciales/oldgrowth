@@ -25,6 +25,13 @@ emails. Everything downstream of ingestion (GIS enrichment, canopy scoring,
 feature vectors, the preference model, the rating UI) is unchanged in
 spirit; the pivot is the source, not the product.
 
+RentCast was later **restored in a narrower, background-only role**
+(`canopy/ingest.py`, `canopy/clients/rentcast.py`, both un-deleted —
+see this file's Appendix): it still never supplies rating candidates, but
+its listing data fills gaps Zillow's alert emails don't carry (lot size,
+year built, property type, MLS info). See Component 2 and
+`canopy/rentcast_backfill.py`.
+
 ## System Overview
 
 Two loops share the same database: a daily batch pipeline that keeps
@@ -37,6 +44,11 @@ a JSON API.
 Zillow Alert Emails ──▶ Email Ingest ──▶ Parcel/GIS Enrichment ──▶ Canopy Scoring
  (IMAP poll, parse)   (geocode, dedupe,     (New Hanover County        (raster %
                           store)              ArcGIS REST)                cover)
+                          │
+                          ▼
+                RentCast Collation
+             (canopy/rentcast_backfill.py --
+              fills gaps by address match)
                                               │
                                               ▼
                                   Feature Vector Computation
@@ -47,6 +59,12 @@ Zillow Alert Emails ──▶ Email Ingest ──▶ Parcel/GIS Enrichment ─�
                           Preference Model Refit (per rater, separately)
                          pairwise logistic regression + tag-driven hinge
                               basis expansion (SCORING_MODEL.md)
+
+                     RENTCAST REFRESH (background, ~every 5 days,
+                          independent schedule, no rating candidates)
+                       RentCast API ──▶ RentCast Listing Rows ──▶ (feeds
+                       (canopy/ingest.py, source='rentcast')    the collation
+                                                                  step above)
 
                           WEEKLY DIGEST (Stage 6, independent schedule)
                             Digest Slot Selection + Email
@@ -72,21 +90,26 @@ pass never ranks, it only describes and sanity-checks.
 ## Components
 
 ### 1. Scheduler
-- Two independent Railway Cron Job services: `python -m canopy.cli
-  run-daily` (Stages 1-5) and `python -m canopy.cli run-digest` (Stage 6),
-  sharing the same Postgres/env vars as the web service.
+- Three independent Railway Cron Job services: `python -m canopy.cli
+  run-daily` (Stages 1-5), `python -m canopy.cli run-digest` (Stage 6),
+  and `python -m canopy.cli run-rentcast` (background RentCast refresh +
+  collation), sharing the same Postgres/env vars as the web service.
 - Cadence: ingestion is **daily** — RentCast's call budget was the only
   reason it was weekly, and Zillow/Mapbox/NHC GIS/NLCD raster are all
   free/cheap at this volume. The digest stays **weekly** by design
   (a daily email would be noise, not signal), independently schedulable
   now that `canopy/cli.py::run_pipeline` and `run_digest` are split.
+  `run-rentcast` runs **every ~5 days**, sized to RentCast's 50-call/month
+  free tier (`RENTCAST_MONTHLY_CALL_BUDGET`) — daily or every-72-hours
+  would exceed it; see `canopy/config.py`'s comment for the arithmetic.
 
 ### 2. Listing Ingestion
 - **Zillow saved-search / recommendation alert emails**, polled via IMAP
   (`canopy/clients/gmail.py`) from a Gmail label a filter routes them
   into, parsed from the email's `text/plain` MIME part
   (`canopy/clients/zillow_email.py` — chosen over Zillow's obfuscated
-  HTML, which carries the same fields with far more fragility).
+  HTML, which carries the same fields with far more fragility). This is
+  still the sole source of rating candidates.
 - Dedupe primarily by `zpid` (extracted from the "View this listing" URL),
   falling back to a normalized-address match when no zpid is recoverable;
   see `canopy/email_ingest.py`. Field-presence-aware upsert: a parsed
@@ -98,13 +121,49 @@ pass never ranks, it only describes and sanity-checks.
   (`canopy/cli.py::_unenriched_backlog`, `_unfeatured_backlog`).
 - Zillow's alert emails don't state an explicit property-type field, so
   the Condo/Apartment hard-exclusion (`canopy.rating.is_hard_excluded`)
-  can't fire pre-ingest for this source — a documented gap, not a bug.
-  Addresses that fail to geocode (new-construction lots, unnumbered
-  addresses) ingest with `latitude`/`longitude` left `null`; every
-  downstream stage (GIS enrichment, anchor drive times, the vision pass)
-  guards for that and imputes rather than crashing.
+  can't fire pre-ingest for this source unless RentCast collation (below)
+  backfills `property_type` from a matching row — a documented gap for
+  uncollated listings, not a bug. Addresses that fail to geocode
+  (new-construction lots, unnumbered addresses) ingest with
+  `latitude`/`longitude` left `null`; every downstream stage (GIS
+  enrichment, anchor drive times, the vision pass) guards for that and
+  imputes rather than crashing.
+- Geocoded zip codes outside `TARGET_ZIPS` are logged and the listing is
+  flagged `outOfArea` (surfaced in Consider) rather than excluded — a
+  Zillow saved search can reach further than RentCast's/this app's
+  original coverage area, and that's worth a human glance, not a
+  hard-filter decision.
+- **RentCast collation** (`canopy/rentcast_backfill.py`): matches
+  Zillow-sourced listings to a RentCast row by a suffix-normalized street
+  address (RentCast abbreviates suffixes and appends zip; Zillow spells
+  them out and omits it — plain string equality doesn't work), and fills
+  in `lot_size_sqft`, `year_built`, `property_type`, `county`,
+  `mls_name`/`mls_number`, `zip_code`, `listed_date`, and market-history
+  raw fields (`daysOnMarket`/`hoa`/`history`) the Zillow row doesn't
+  already have — never overwriting a value Zillow supplied. Matched
+  listings are flagged `Listing.collated_with_rentcast`, which
+  `canopy.rating.get_batch` uses to surface them first in the rating
+  queue. Runs automatically for newly-changed listings inside
+  `run_pipeline` (Stage 1) and again after every `run-rentcast` refresh;
+  `python -m canopy.cli backfill-rentcast` re-runs it against everything
+  without polling the API, useful after a matching-logic change.
 
-### 3. Parcel & GIS Enrichment
+### 3. Background RentCast Refresh (`canopy/ingest.py`, `canopy/clients/rentcast.py`)
+- Retired as the *primary* listings source (see Appendix), restored as a
+  background-only feed whose sole purpose is keeping Component 2's
+  collation pool from going stale. Confirmed live: right after retirement,
+  RentCast's ~1000 rows all shared the exact same `first_seen` timestamp
+  (a one-time historical pull, frozen the moment ingestion was retired) —
+  match rate against fresh Zillow listings was mostly a staleness
+  artifact, not a matching-logic gap.
+- Same `fetch_sale_listings_for_zip`/one-call-per-`TARGET_ZIPS`-zip
+  design as the original RentCast ingest. RentCast-sourced rows
+  (`source = 'rentcast'`) never get GIS enrichment, canopy scoring,
+  feature vectors, or vision — those stages only ever run on
+  Zillow-sourced listings — and never enter the rating queue (Component
+  9). `canopy/cli.py::run_rentcast_weekly` is ingest + collation only.
+
+### 4. Parcel & GIS Enrichment
 - **New Hanover County ArcGIS REST API** (public, free, no key).
 - Point-in-polygon lookup for the parcel, then two levels of boundary
   analysis:
@@ -122,7 +181,7 @@ pass never ranks, it only describes and sanity-checks.
     proxy.
 - Flood zone and wetland overlay/percentage for the parcel itself.
 
-### 4. Canopy Scoring
+### 5. Canopy Scoring
 - NLCD Tree Canopy Cover raster (WCS `GetCoverage`, cached locally),
   zonal stats via `rasterio.mask`. Deterministic, no AI.
 - A raster-masking bug (bounding-box fill pixels outside the actual
@@ -133,7 +192,7 @@ pass never ranks, it only describes and sanity-checks.
   approximated via parcel year-built + canopy density. Documented
   limitation, not a solved problem.
 
-### 5. Feature Vector Computation
+### 6. Feature Vector Computation
 - `canopy/features.py`, per `FEATURE_SCHEMA.md`. Every listing gets a
   full vector — lot/surroundings, canopy (parcel *and* neighborhood-
   buffer, a deliberate split so "wooded street, open lot" is visible),
@@ -147,7 +206,7 @@ pass never ranks, it only describes and sanity-checks.
   etc.) are reserved columns, not yet populated — OpenStreetMap
   integration is deferred (see Known Limitations).
 
-### 6. Lazy Vision Pass (`canopy/vision.py`)
+### 7. Lazy Vision Pass (`canopy/vision.py`)
 - Runs **once per listing, on first view** (triggered by `GET
   /api/batch`/`/api/pair`), not as a bulk weekly step — running Claude
   vision on the full weekly listing volume would blow past this
@@ -161,7 +220,7 @@ pass never ranks, it only describes and sanity-checks.
   on preference — SCORING_MODEL.md §10 is explicit that only rater
   judgments are training labels.
 
-### 7. Rating UI + API
+### 8. Rating UI + API
 - **Frontend**: React + Vite (`frontend/`), built to static assets and
   served by the same Flask process (`canopy/app.py`) — one local
   process, no CORS. Four tabs: Consider (swipe triage), Compare
@@ -176,7 +235,7 @@ pass never ranks, it only describes and sanity-checks.
   this is now a real trust boundary), anchor CRUD with server-side
   geocoding (Mapbox).
 
-### 8. Preference Model (`canopy/model.py`)
+### 9. Preference Model (`canopy/model.py`)
 - Pairwise logistic regression on feature *differences*
   (`P(a≻b) = σ(w·(x_a−x_b))`), fit separately per rater, ridge-
   regularized toward a hand-set cold-start prior (`model_prior.py`) —
@@ -197,7 +256,7 @@ pass never ranks, it only describes and sanity-checks.
 - Two raters' models are **never averaged**. The weekly digest combines
   them as `joint_score = min(z_a, z_b)`.
 
-### 9. Storage
+### 10. Storage
 - Postgres. Core listing pipeline: `listings`, `parcels`, `scores`,
   `digest_log`. Preference layer: `listing_features`, `anchors`,
   `listing_anchor_times`, `raters`, `judgments`, `tags`, `judgment_tags`,
@@ -206,16 +265,23 @@ pass never ranks, it only describes and sanity-checks.
   `scores` table, which stays deterministic-canopy-only). Email-ingestion
   layer: `email_ingest_log` (Message-ID-keyed dedup, independent of
   per-listing dedup — see Component 2).
-- `listings.source` distinguishes `'rentcast'` (retired, historical only)
-  from `'zillow_email'` (current). `canopy.rating.excluded_listing_ids`
+- `listings.source` distinguishes `'rentcast'` (background collation feed
+  only, never a rating candidate) from `'zillow_email'` (current, sole
+  source of rating candidates). `canopy.rating.excluded_listing_ids`
   — the single choke point behind `get_batch`/`get_pair`/`_random_pair`
   in `canopy/rating.py` — excludes anything not `source ==
   'zillow_email'` from the rating queue, alongside the property-type/
   multi-address hard exclusions. RentCast rows are never deleted (they're
   real historical rating data — some already have judgments against
-  them) but can't surface as new rating candidates.
+  them, and current rows keep flowing in via `run-rentcast`) but can't
+  surface as new rating candidates.
+- `listings.collated_with_rentcast` — set by
+  `canopy/rentcast_backfill.py` when a Zillow-sourced row was matched to
+  a RentCast row and at least one gap field was ever filled from it.
+  `canopy.rating.get_batch` surfaces collated listings first, since they
+  carry a more complete feature vector.
 
-### 10. Digest / Delivery
+### 11. Digest / Delivery
 - `canopy/digest.py`, built from `canopy/model.py::compute_digest_slots`
   — not a filter's pass/fail list. Sections: top-ranked (~70%),
   uncertain/most-informative-to-rate (~20%), wildcard (~10%), and a
@@ -226,14 +292,15 @@ pass never ranks, it only describes and sanity-checks.
   week, which is correct for a ranking system.
 
 ## Tech Stack
-- Python / Flask, Postgres — Railway in production (web service + two
+- Python / Flask, Postgres — Railway in production (web service + three
   Cron Job services + Postgres plugin, see README.md's Deploy section),
   Docker Compose for local dev
 - React + Vite (`frontend/`) — no Tailwind, a small literal CSS file for
   the handful of layout utility classes the UI prototype used
 - `numpy` / `scipy` — the preference model's fitting/bootstrap machinery
-- Gmail IMAP + Zillow alert emails — listings data (RentCast is retired;
-  see Appendix)
+- Gmail IMAP + Zillow alert emails — sole source of rating candidates
+- RentCast API — background-only collation feed, restored after full
+  retirement as the primary source; see Appendix and Component 3
 - New Hanover County ArcGIS REST API — parcel/boundary/flood/wetland data
 - NLCD raster (`rasterio`) — tree canopy %
 - Anthropic API (Claude, vision + text) — lazy per-listing structural
@@ -243,11 +310,13 @@ pass never ranks, it only describes and sanity-checks.
 - `requests` / `httpx` / stdlib `imaplib` — API/email clients
 
 ## API Budget & Constraints
-- No hard call-budget ceiling today — Gmail IMAP polling has no per-call
-  cost, and Anthropic/Mapbox calls are bounded by the lazy-vision design
-  (once per listing, ever, not per week) rather than a quota. RentCast's
-  50-call/month free tier was the original binding constraint (see
-  Appendix) and no longer applies.
+- Gmail IMAP polling has no per-call cost, and Anthropic/Mapbox calls are
+  bounded by the lazy-vision design (once per listing, ever, not per
+  week) rather than a quota. RentCast's 50-call/month free tier no longer
+  gates the primary ingestion path, but it does still gate
+  `run-rentcast`'s cadence directly — see Component 1/3 and
+  `canopy/config.py`'s `RENTCAST_MONTHLY_CALL_BUDGET` comment for the
+  math (weekly-ish is comfortable, daily or every-72-hours is not).
 - No scraping of Zillow/Redfin/Realtor.com's own pages — the boundary is
   receiving your own forwarded/alerted email (fine) vs. fetching a
   listing site's page yourself (not fine).
@@ -296,13 +365,14 @@ pass never ranks, it only describes and sanity-checks.
   breaking Vite major-version bump, deferred.
 - No auth/multi-tenancy — fine for a two-person personal tool, would need
   real hardening before any wider use.
-- **RentCast-sourced listings (`source = 'rentcast'`) no longer get
-  refreshed.** Their `status`/`last_seen_date` stop updating now that
-  `canopy/clients/rentcast.py` is deleted, so a RentCast row that's since
-  gone off-market has no mechanism to reflect that — it just sits static.
-  Not a correctness problem for rating (they're excluded from the queue,
-  see Component 9) but worth knowing if you ever query `listings` by
-  `status` across both sources.
+- **RentCast-sourced listings are refreshed only every ~5 days**
+  (`run-rentcast`, Component 1/3), not daily like the Zillow path — a
+  deliberate tradeoff for the 50-call/month free tier, not an oversight.
+  A RentCast row can lag up to ~5 days behind a real status/price change.
+  Not a correctness problem for rating (RentCast rows are excluded from
+  the queue regardless, see Component 10) but worth knowing if you ever
+  query `listings` by `status` across both sources, or wonder why a
+  RentCast-side match briefly showed stale data.
 - **No reliable "is this land commercial/multi-home-development-scale"
   signal exists across the whole market.** Investigated NHC's GIS
   zoning layers (`Layers/Zoning_base/FeatureServer/3`,
@@ -351,32 +421,37 @@ pass never ranks, it only describes and sanity-checks.
   free (same Mapbox relationship already in use), gives locational
   context, but isn't a photo of the house itself.
 
-## Appendix: Retired RentCast Design
+## Appendix: RentCast's Role Over Time
 
-The sections above describe the current (Zillow-alert-email) ingestion
-design. Listings ingestion originally ran on the RentCast API, retired in
-favor of Zillow alert emails — see this file's Purpose section for why.
-The details below are preserved as historical record only; none of it
-describes current behavior, and `canopy/clients/rentcast.py`/
-`canopy/ingest.py` are deleted from the codebase.
+RentCast has occupied three different roles in this project, in order.
+Not all of the detail below describes current behavior — read each bullet
+in its own time frame.
 
-- **Source**: RentCast API free tier (50 calls/month) — chosen over ATTOM
-  (sales-call-gated) and unofficial scrapers (ToS risk). Weekly searches
-  across the 6 target zips (`TARGET_ZIPS`) cost ≈24-26 calls/month.
-- **Cadence**: weekly, sized directly to that call budget — not a
-  reflection of how fresh the underlying market data actually was.
-- **No photo field**: RentCast's batched-by-zip sale-listings endpoint
-  (the one within budget to call) had no photo field at all; a
-  per-listing detail call might have had one, but calling RentCast
-  per-property was explicitly ruled out by the same budget constraint.
-  This is the reason Consider's photo slot originally showed only a
-  location map, before `photoUrl` (Zillow-hosted CDN images) became
-  available via the email pivot.
-- **No zoning/description field**: relevant to the "development-scale
-  land" open question in Known Limitations above — RentCast's payload
-  had nothing to add there either.
-- Ingestion (Stage 1) polled RentCast per target zip, deduped by
-  RentCast's own listing ID, and stored into the same `listings` table
-  now shared with `source = 'zillow_email'` rows (`source = 'rentcast'`
-  for these). That data isn't deleted — see Component 9 (Storage) for
-  how it's excluded from the rating queue without being purged.
+1. **Original design: primary listings source.** RentCast API free tier
+   (50 calls/month) — chosen over ATTOM (sales-call-gated) and unofficial
+   scrapers (ToS risk). Weekly searches across the 6 target zips
+   (`TARGET_ZIPS`) cost ≈24-26 calls/month; cadence was weekly, sized
+   directly to that budget, not a reflection of how fresh the underlying
+   market data actually was. RentCast's batched-by-zip sale-listings
+   endpoint had no photo field at all, and no zoning/description field
+   either (relevant to the "development-scale land" open question in
+   Known Limitations above) — a per-listing detail call might have had a
+   photo, but calling RentCast per-property was explicitly ruled out by
+   the budget constraint. This is why Consider's photo slot originally
+   showed only a location map, before `photoUrl` (Zillow-hosted CDN
+   images) became available via the email pivot below.
+2. **Fully retired**, in favor of Zillow alert emails — see this file's
+   Purpose section for why. `canopy/clients/rentcast.py`/`canopy/ingest.py`
+   were deleted; existing RentCast rows stayed in Postgres as static
+   historical data, excluded from the rating queue.
+3. **Restored as a background-only weekly-ish feed.** Investigating a low
+   Zillow-to-RentCast match rate in `canopy/rentcast_backfill.py`'s
+   collation found it was mostly caused by RentCast's rows all sharing
+   one frozen `first_seen` timestamp from the retirement-day pull, not a
+   fundamental data-quality gap — so `canopy/clients/rentcast.py`/
+   `canopy/ingest.py` were restored (same design as role 1: one call per
+   `TARGET_ZIPS` zip, same 50-call/month budget) to keep that pool fresh,
+   run every ~5 days via `canopy.cli.run_rentcast_weekly`. RentCast rows
+   still never enter the rating queue and never get GIS enrichment/canopy
+   scoring/feature vectors/vision — this role exists purely to feed
+   Component 2's collation step. See Component 3 for current detail.

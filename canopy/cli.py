@@ -9,6 +9,7 @@ from canopy.digest import send_digest
 from canopy.email_ingest import ingest_from_email
 from canopy.enrich import enrich_listings
 from canopy.features import FEATURE_SET_VERSION, compute_features_for_listings
+from canopy.ingest import ingest_all_zips
 from canopy.model import compute_digest_slots, fit_model
 from canopy.model import score_listings as score_preferences
 from canopy.rating import is_hard_excluded
@@ -168,6 +169,35 @@ def compute_features() -> None:
         session.close()
 
 
+def run_rentcast_weekly() -> None:
+    """RentCast refresh, every ~5 days -- restored as a background-only
+    feed after RentCast's full retirement as the primary listings source
+    (see docs/ARCHITECTURE.md's Appendix). RentCast-sourced rows still
+    never enter the rating queue (canopy.rating.excluded_listing_ids) and
+    never get GIS enrichment/canopy scoring/vision -- only Zillow-sourced
+    listings need those. This job's only purpose is to keep
+    canopy/rentcast_backfill.py's matching pool from going stale (see that
+    module's docstring: the original 4/19 match rate was mostly a
+    staleness artifact from a one-time historical pull). New Railway Cron
+    Job, every ~5 days (6 zips x 1 call each x ~6 runs/month =~ 36 calls,
+    comfortably under RentCast's 50-call/month free tier
+    (RENTCAST_MONTHLY_CALL_BUDGET) -- daily or every-72-hours would blow
+    past it)."""
+    session = SessionLocal()
+    try:
+        logger.info("=== RentCast refresh: ingest ===")
+        changed = ingest_all_zips(session)
+        logger.info("%d new/changed RentCast listings", len(changed))
+
+        logger.info("=== RentCast refresh: collate against Zillow listings ===")
+        backfilled = backfill_from_rentcast(session)
+        logger.info("%d Zillow listings collated with matching RentCast data", len(backfilled))
+        if backfilled:
+            compute_features_for_listings(session, backfilled)
+    finally:
+        session.close()
+
+
 def backfill_rentcast() -> None:
     """Retroactive one-off: collate every already-ingested Zillow listing
     against RentCast's historical rows (run_pipeline only does this for
@@ -200,8 +230,11 @@ def main() -> None:
     )
     subparsers.add_parser("compute-features", help="Run Stage 4 (feature vectors) standalone")
     subparsers.add_parser(
+        "run-rentcast", help="Weekly background RentCast refresh + collation (no rating candidates)"
+    )
+    subparsers.add_parser(
         "backfill-rentcast",
-        help="Collate all Zillow listings against historical RentCast rows by address, once",
+        help="Collate all Zillow listings against existing RentCast rows by address, without polling RentCast",
     )
 
     args = parser.parse_args()
@@ -211,6 +244,8 @@ def main() -> None:
         run_digest(dry_run=args.dry_run)
     elif args.command == "compute-features":
         compute_features()
+    elif args.command == "run-rentcast":
+        run_rentcast_weekly()
     elif args.command == "backfill-rentcast":
         backfill_rentcast()
 

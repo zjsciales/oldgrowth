@@ -14,11 +14,17 @@ from sqlalchemy.orm import Session
 from canopy.clients import gmail
 from canopy.clients.mapbox import MapboxError, geocode_address
 from canopy.clients.zillow_email import ZillowParseError, parse_zillow_alert_email
+from canopy.config import TARGET_ZIPS
 from canopy.db.models import EmailIngestLog, Listing
 
 logger = logging.getLogger(__name__)
 
 _NORMALIZE_RE = re.compile(r"[^a-z0-9]+")
+# Mapbox's geocoding v6 full_address always ends "..., <State> <ZIP>,
+# United States" for a real street address within WILMINGTON_METRO_BBOX
+# (confirmed live) -- anchored to "United States" so this never matches
+# the street number at the start of the string instead.
+_ZIP_RE = re.compile(r"(\d{5})(?=,\s*United States)")
 
 
 def _normalize_address(formatted_address: str) -> str:
@@ -40,17 +46,18 @@ def _listing_id(zpid: str | None, normalized_address: str) -> str:
     return f"zillow-addr-{digest}"
 
 
-def _geocode(formatted_address: str) -> tuple[float | None, float | None]:
+def _geocode(formatted_address: str) -> tuple[float | None, float | None, str | None]:
     try:
         geocoded = geocode_address(formatted_address)
     except MapboxError:
         logger.exception("geocoding failed for %r, ingesting without coordinates", formatted_address)
-        return None, None
+        return None, None, None
     if geocoded is None:
         logger.warning("no geocode match for %r, ingesting without coordinates", formatted_address)
-        return None, None
-    lat, lon, _resolved = geocoded
-    return lat, lon
+        return None, None, None
+    lat, lon, resolved_address = geocoded
+    zip_match = _ZIP_RE.search(resolved_address)
+    return lat, lon, (zip_match.group(1) if zip_match else None)
 
 
 def _upsert_listing(session: Session, parsed: dict, received_at: dt.datetime) -> tuple[Listing, bool]:
@@ -80,13 +87,14 @@ def _upsert_listing(session: Session, parsed: dict, received_at: dt.datetime) ->
         listing = existing
         changed = False
 
-    lat, lon = _geocode(parsed["formatted_address"])
+    lat, lon, zip_code = _geocode(parsed["formatted_address"])
 
     field_values = {
         "price": parsed.get("price"),
         "square_footage": parsed.get("square_footage"),
         "latitude": lat,
         "longitude": lon,
+        "zip_code": zip_code,
         "property_type": "New Construction" if parsed.get("is_new_construction") else None,
         "photo_url": parsed.get("photo_url"),
     }
@@ -96,6 +104,12 @@ def _upsert_listing(session: Session, parsed: dict, received_at: dt.datetime) ->
         if getattr(listing, field) != value:
             changed = True
         setattr(listing, field, value)
+
+    if listing.zip_code and listing.zip_code not in TARGET_ZIPS:
+        logger.warning(
+            "zillow_email: %s is outside TARGET_ZIPS (zip=%s) -- flagged out of area",
+            listing.formatted_address, listing.zip_code,
+        )
 
     raw = dict(listing.raw or {})
     raw.update({k: v for k, v in parsed.items() if v is not None})

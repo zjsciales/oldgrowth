@@ -253,17 +253,33 @@ def get_batch(session: Session, rater_id: str, n: int = 40) -> list[Listing]:
         .all()
     )
 
+    # Listings canopy/rentcast_backfill.py has collated with a matching
+    # RentCast row carry a more complete feature vector (lot size, year
+    # built, market history) -- surface those ahead of everything else,
+    # then fill the rest of the batch normally. Applied within whichever
+    # selection strategy is active (stratified cold-start or
+    # variance-based active selection), not instead of it.
+    collated_ids = {
+        listing_id for (listing_id,) in
+        session.query(Listing.id).filter(Listing.collated_with_rentcast.is_(True))
+    }
+    collated = [row for row in candidates if row.listing_id in collated_ids]
+    rest = [row for row in candidates if row.listing_id not in collated_ids]
+
     latest_run = _latest_model_run(session, rater_id)
     if latest_run is None:
-        chosen = _stratified_sample(candidates, n)
+        chosen = _stratified_sample(collated, n)
+        if len(chosen) < n:
+            chosen += _stratified_sample(rest, n - len(chosen))
     else:
         variance_by_listing = {
             ps.listing_id: ps.pred_variance for ps in
             session.query(PreferenceScore).filter(PreferenceScore.model_run_id == latest_run.id)
         }
-        chosen = sorted(
-            candidates, key=lambda row: variance_by_listing.get(row.listing_id) or -1, reverse=True
-        )[:n]
+        by_variance = lambda rows: sorted(  # noqa: E731
+            rows, key=lambda row: variance_by_listing.get(row.listing_id) or -1, reverse=True
+        )
+        chosen = (by_variance(collated) + by_variance(rest))[:n]
 
     return _listings_for(session, [row.listing_id for row in chosen])
 

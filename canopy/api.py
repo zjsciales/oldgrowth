@@ -8,6 +8,7 @@ import uuid
 from flask import Blueprint, Response, jsonify, request
 
 from canopy.clients.mapbox import MapboxError, fetch_location_map
+from canopy.config import TARGET_ZIPS
 from canopy.db.models import Anchor, Listing, ListingFeatures, ModelRun, Parcel, Tag
 from canopy.db.session import SessionLocal
 from canopy.features import FEATURE_SET_VERSION
@@ -83,6 +84,8 @@ def _listing_card(session, listing: Listing, features: ListingFeatures) -> dict:
         "countyRecordsUrl": NHC_RECORDS_SEARCH_URL,
         "parcelId": parcel.parcel_id if parcel else None,
         "photoUrl": listing.photo_url,
+        "collatedWithRentcast": listing.collated_with_rentcast,
+        "outOfArea": bool(listing.zip_code) and listing.zip_code not in TARGET_ZIPS,
         "sqft": features.sqft,
         "beds": features.beds,
         "baths": features.baths,

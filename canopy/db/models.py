@@ -51,6 +51,13 @@ class Listing(Base):
     photo_url: Mapped[str | None] = mapped_column(String, nullable=True)
     photo_urls: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
+    # True once canopy/rentcast_backfill.py has matched this (always
+    # source='zillow_email') listing to a historical RentCast row and
+    # filled in at least one gap field -- surfaced first in the rating
+    # queue (canopy.rating.get_batch) since collated listings carry a
+    # more complete feature vector.
+    collated_with_rentcast: Mapped[bool] = mapped_column(default=False)
+
     raw: Mapped[dict] = mapped_column(JSON)  # full source payload, for reference
 
     first_seen: Mapped[dt.datetime] = mapped_column(DateTime, server_default=func.now())

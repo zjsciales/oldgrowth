@@ -66,6 +66,38 @@ def test_backfill_skips_fields_zillow_already_has(session):
     assert listing.year_built == 2020  # Zillow's own value, not RentCast's
 
 
+def test_backfill_flags_a_listing_already_filled_before_the_flag_existed(session):
+    """Regression: collated_with_rentcast was added after listings could
+    already have every gap field filled from an earlier backfill run (or
+    a fresh ingest that happened to carry the same values). Those
+    listings must still get flagged even though there's nothing left to
+    fill -- the flag means 'has a known RentCast counterpart,' not 'this
+    call changed a field.'"""
+    session.add(_rentcast("rentcast-1", "1 Main St, Wilmington, NC 28403"))
+    # Every BACKFILL_FIELDS value already present, matching rentcast-1's
+    # -- as if an earlier backfill (pre-dating collated_with_rentcast)
+    # already ran, or a coincidence. collated_with_rentcast defaults to
+    # False either way.
+    session.add(_zillow(
+        "zillow-1", "1 Main Street, Wilmington, NC",
+        lot_size_sqft=10000.0, year_built=1990, property_type="Single Family",
+        county="New Hanover", mls_name="NCRMLS", mls_number="100123456",
+        zip_code="28403", listed_date=dt.datetime(2026, 1, 1),
+        raw={"bedrooms": 3.0, "bathrooms": 2.0, "daysOnMarket": 12,
+             "hoa": {"fee": 50}, "history": {"2026-01-01": {"price": 400000}}},
+    ))
+    session.commit()
+
+    changed = backfill_from_rentcast(session)
+
+    assert len(changed) == 1
+    assert changed[0].collated_with_rentcast is True
+
+    # A second call now that the flag is set and nothing's left to fill
+    # correctly reports nothing changed.
+    assert backfill_from_rentcast(session) == []
+
+
 def test_backfill_no_match_leaves_listing_unchanged(session):
     session.add(_rentcast("rentcast-1", "1 Main St, Wilmington, NC 28403"))
     session.add(_zillow("zillow-1", "9 Nonexistent Ave, Wilmington, NC"))
