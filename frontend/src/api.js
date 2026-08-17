@@ -37,6 +37,10 @@ export function postComparison(payload) {
   return request("/api/comparison", { method: "POST", body: JSON.stringify(payload) });
 }
 
+export function postVision(listingId) {
+  return request(`/api/listings/${encodeURIComponent(listingId)}/vision`, { method: "POST" });
+}
+
 export function getWeights(rater) {
   return request(`/api/weights?rater=${encodeURIComponent(rater)}`);
 }

@@ -37,5 +37,12 @@ export function usePair(rater) {
     refresh();
   }
 
-  return { pair, strategy, loading, error, choose };
+  // Merges an updated listing (e.g. vision-pass results arriving after
+  // the initial pair load, see useListingVision) into the pair in place,
+  // without a refetch.
+  function patchListing(id, patch) {
+    setPair((p) => p && p.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+  }
+
+  return { pair, strategy, loading, error, choose, patchListing };
 }

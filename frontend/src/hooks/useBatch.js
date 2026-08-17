@@ -43,5 +43,12 @@ export function useBatch(rater) {
     setDone((d) => d + 1);
   }
 
-  return { current: queue[0] || null, remaining: queue.length, done, loading, judge, refresh };
+  // Merges an updated listing (e.g. vision-pass results arriving after
+  // the initial batch load, see useListingVision) into the queue in
+  // place, without a refetch.
+  function patchListing(id, patch) {
+    setQueue((q) => q.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+  }
+
+  return { current: queue[0] || null, remaining: queue.length, done, loading, judge, refresh, patchListing };
 }

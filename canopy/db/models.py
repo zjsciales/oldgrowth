@@ -185,6 +185,23 @@ class ListingFeatures(Base):
     canopy_delta: Mapped[float | None] = mapped_column(Float, nullable=True)
     median_year_built_buffer: Mapped[int | None] = mapped_column(Integer, nullable=True)
     canopy_age_proxy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # The actual model-input canopy value (canopy/model.py trains on this,
+    # not parcel_canopy_pct directly). Defaults to parcel_canopy_pct at
+    # every normal feature computation (canopy/features.py); only
+    # overwritten by canopy/vision.py when a high-confidence vision read
+    # disagrees with the raster -- see canopy_pct_overridden_by_vision.
+    # parcel_canopy_pct itself is never mutated by vision, so the raw
+    # raster value stays available for display/audit.
+    effective_canopy_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Claude's own visual canopy-% estimate from the vision pass, recorded
+    # every time vision runs regardless of whether it clears the
+    # confidence gate below -- an audit trail of what vision thought, even
+    # when not applied to effective_canopy_pct.
+    vision_canopy_pct_estimate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # consistent_with_raster | recently_cleared | significant_regrowth | uncertain
+    canopy_condition: Mapped[str | None] = mapped_column(String, nullable=True)
+    canopy_condition_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    canopy_pct_overridden_by_vision: Mapped[bool] = mapped_column(default=False)
 
     # road & position -- columns reserved now, populated once OSM
     # integration ships (deferred; see docs/FEATURE_SCHEMA.md §2.3)
@@ -218,6 +235,10 @@ class ListingFeatures(Base):
     garage_type: Mapped[str | None] = mapped_column(String, nullable=True)
     visible_renovation_recency: Mapped[str | None] = mapped_column(String, nullable=True)
     vision_computed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    # Short, rater-facing 1-2 sentence description of the house/lot from
+    # the vision pass -- distinct from Score.subagent_rationale, which is
+    # written for the weekly digest email, not the live rating screen.
+    house_lot_summary: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # market
     list_price: Mapped[float | None] = mapped_column(Float, nullable=True)

@@ -1,7 +1,26 @@
 import datetime as dt
 
-from canopy.cli import _unenriched_backlog, _unfeatured_backlog, run_daily, run_digest, run_pipeline
-from canopy.db.models import Listing, ListingFeatures, Parcel, Rater
+from canopy.cli import (
+    _unenriched_backlog,
+    _unfeatured_backlog,
+    recompute_canopy_and_features,
+    reset_rating_history,
+    run_daily,
+    run_digest,
+    run_pipeline,
+)
+from canopy.db.models import (
+    Judgment,
+    JudgmentAnchor,
+    JudgmentTag,
+    Listing,
+    ListingFeatures,
+    ModelRun,
+    Parcel,
+    PairwiseComparison,
+    PreferenceScore,
+    Rater,
+)
 
 
 def _listing(listing_id: str, property_type: str | None = None, formatted_address: str | None = None) -> Listing:
@@ -198,6 +217,69 @@ def test_run_digest_sends_using_latest_state(monkeypatch, session):
 
     assert digest_calls == [("andrea", "zach")]
     assert len(send_calls) == 1
+
+
+def test_recompute_canopy_and_features_rescores_and_recomputes_already_featured_listings(monkeypatch, session):
+    session.add(_listing("l1"))
+    session.add(ListingFeatures(listing_id="l1", feature_set_version="v1"))
+    session.add(_listing("l2", property_type="Condo"))  # hard-excluded, must be skipped
+    session.add(ListingFeatures(listing_id="l2", feature_set_version="v1"))
+    # never featured (e.g. a RentCast row that was never a rating
+    # candidate) -- must not newly get live GIS calls from this rollout
+    session.add(_listing("l3"))
+    session.commit()
+
+    monkeypatch.setattr("canopy.cli.SessionLocal", lambda: session)
+    score_calls, feature_calls = [], []
+    monkeypatch.setattr("canopy.cli.score_canopy", lambda s, listings: score_calls.extend(x.id for x in listings))
+    monkeypatch.setattr(
+        "canopy.cli.compute_features_for_listings", lambda s, listings: feature_calls.extend(x.id for x in listings)
+    )
+
+    recompute_canopy_and_features()
+
+    assert score_calls == ["l1"]
+    assert feature_calls == ["l1"]
+
+
+def test_reset_rating_history_clears_rating_tables_and_vision_cache(monkeypatch, session):
+    session.add_all([Rater(id="zach", display_name="Zach"), Rater(id="andrea", display_name="Andrea")])
+    session.add(_listing("l1"))
+    session.add(ListingFeatures(listing_id="l1", feature_set_version="v1", vision_computed_at=_now()))
+    judgment = Judgment(
+        rater_id="zach", listing_id="l1", mode="swipe", verdict="yes",
+        session_id="s1", feature_set_version="v1",
+    )
+    session.add(judgment)
+    session.commit()
+    session.add(JudgmentTag(judgment_id=judgment.id, tag_code="mature_canopy"))
+    session.add(PairwiseComparison(
+        rater_id="zach", listing_a="l1", listing_b="l1", winner="tie", feature_set_version="v1",
+    ))
+    model_run = ModelRun(
+        rater_id="zach", feature_set_version="v1", n_pairs=0,
+        coefficients={}, scaler_params={},
+    )
+    session.add(model_run)
+    session.commit()
+    session.add(PreferenceScore(listing_id="l1", model_run_id=model_run.id, raw_score=0, display_score=0))
+    session.commit()
+
+    monkeypatch.setattr("canopy.cli.SessionLocal", lambda: session)
+
+    reset_rating_history()
+
+    assert session.query(Judgment).count() == 0
+    assert session.query(JudgmentTag).count() == 0
+    assert session.query(JudgmentAnchor).count() == 0
+    assert session.query(PairwiseComparison).count() == 0
+    assert session.query(ModelRun).count() == 0
+    assert session.query(PreferenceScore).count() == 0
+    features = session.query(ListingFeatures).filter_by(listing_id="l1").one()
+    assert features.vision_computed_at is None
+    # Listing/ListingFeatures rows themselves are real ingested/GIS data,
+    # not rating history -- must survive.
+    assert session.query(Listing).count() == 1
 
 
 def test_run_digest_skips_without_exactly_two_raters(monkeypatch, session):

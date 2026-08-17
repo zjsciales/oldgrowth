@@ -46,9 +46,10 @@ Companion doc: `SCORING_MODEL.md` (how these get turned into a ranking).
 
 | Feature | Type | Notes |
 |---|---|---|
-| `parcel_canopy_pct` | float 0–100 | Canopy on the lot itself |
+| `parcel_canopy_pct` | float 0–100 | Raw raster value, canopy on the lot itself. Display/audit only — **not** a model input as of the vision-correction change below |
+| `effective_canopy_pct` | float 0–100 | **The actual model input.** Equals `parcel_canopy_pct` unless the lazy vision pass overrides it with a high-confidence correction — see `canopy_pct_overridden_by_vision` in §2.5 |
 | `neighborhood_canopy_pct` | float 0–100 | Canopy within a ~150m buffer |
-| `canopy_delta` | float | `neighborhood − parcel`. Captures "wooded street, open yard" vs. the reverse |
+| `canopy_delta` | float | `neighborhood − effective`. Captures "wooded street, open yard" vs. the reverse; recomputed against whichever canopy value is currently in effect |
 | `median_year_built_buffer` | int | Old-growth proxy — neighborhood age within buffer |
 | `canopy_age_proxy` | float | Composite of `neighborhood_canopy_pct` × `median_year_built_buffer`. Explicitly a heuristic; validate against ratings before trusting |
 
@@ -100,8 +101,17 @@ Derived rollups available to the model: `min_drive_beach`,
 | `has_front_porch` | bool | Vision-tagged |
 | `garage_type` | categorical | none / attached / detached / carport |
 | `visible_renovation_recency` | categorical | Vision-tagged: original / dated reno / recent reno |
+| `canopy_condition` | categorical | Vision-tagged: consistent_with_raster / recently_cleared / significant_regrowth / uncertain — the raster comparison that can trigger a §2.2 correction |
+| `canopy_condition_confidence` | float 0–1 | Confidence in `canopy_condition`; must clear `CANOPY_OVERRIDE_CONFIDENCE_THRESHOLD` (`canopy/vision.py`) before it can change `effective_canopy_pct` |
+| `vision_canopy_pct_estimate` | float 0–100 | Vision's own canopy-% read from the image, recorded every vision run regardless of whether it clears the confidence gate — an audit trail even when not applied |
+| `canopy_pct_overridden_by_vision` | bool | Whether `effective_canopy_pct` currently reflects a vision override |
+| `house_lot_summary` | text | Short (1–2 sentence) rater-facing description of the house/lot, vision-generated. Not a model input — informational only, same precedent as `Score.subagent_rationale` |
 
 The vision pass is where architecture becomes learnable instead of vibes.
+It now also looks at the Zillow listing photo (`Listing.photo_url`), when
+available, alongside the satellite image in the same call — see
+`ARCHITECTURE.md`'s Known Limitations for the full canopy-correction
+mechanism and its cost/UX tradeoffs.
 
 ### 2.6 Listing & market — source: listing data (Zillow alert email)
 
@@ -125,7 +135,7 @@ tags actionable rather than decorative — it's how a tag adjusts a weight.
 | Code | Label | Maps to |
 |---|---|---|
 | `road_too_busy` | Too close to a busy road | `fronting_road_class`, `dist_to_arterial_m`, `through_traffic_proxy` |
-| `lot_too_open` | Lot too open / not enough trees | `parcel_canopy_pct` |
+| `lot_too_open` | Lot too open / not enough trees | `effective_canopy_pct` |
 | `street_too_bare` | Street lacks canopy | `neighborhood_canopy_pct` |
 | `neighbors_too_close` | Neighbors on top of us | `lot_width_ft`, `rear_open_distance_ft` |
 | `backs_to_buildable` | Someone can build behind it | `abuts_buildable_private`, `protected_perimeter_ratio` |
@@ -146,7 +156,7 @@ tags actionable rather than decorative — it's how a tag adjusts a weight.
 | Code | Label | Maps to |
 |---|---|---|
 | `great_rear_privacy` | Protected behind it | `protected_perimeter_ratio`, `rear_open_distance_ft` |
-| `mature_canopy` | Beautiful trees on the lot | `parcel_canopy_pct` |
+| `mature_canopy` | Beautiful trees on the lot | `effective_canopy_pct` |
 | `wooded_street` | Whole street is wooded | `neighborhood_canopy_pct`, `median_year_built_buffer` |
 | `quiet_street` | Quiet / low traffic | `fronting_road_class`, `is_cul_de_sac` |
 | `water_adjacency` | Water or marsh access/view | `abuts_water`, `abuts_marsh_wetland` |
@@ -160,7 +170,7 @@ tags actionable rather than decorative — it's how a tag adjusts a weight.
 
 ### 3.3 What the tags are used for
 
-1. **Threshold discovery.** The distribution of `parcel_canopy_pct` among
+1. **Threshold discovery.** The distribution of `effective_canopy_pct` among
    listings tagged `lot_too_open` gives the empirical dealbreaker threshold.
    The distribution among `mature_canopy` gives the delight threshold. This
    is the direct answer to "what canopy number are we comfortable with."
@@ -201,7 +211,8 @@ CREATE TABLE listing_features (
   flood_zone                TEXT,
 
   -- canopy
-  parcel_canopy_pct         REAL,
+  parcel_canopy_pct         REAL,  -- raw raster value, display/audit only
+  effective_canopy_pct      REAL,  -- the actual model input (see §2.2)
   neighborhood_canopy_pct   REAL,
   canopy_delta              REAL,
   median_year_built_buffer  INT,
@@ -226,6 +237,11 @@ CREATE TABLE listing_features (
   has_front_porch           BOOLEAN,
   garage_type               TEXT,
   visible_renovation_recency TEXT,
+  canopy_condition           TEXT,
+  canopy_condition_confidence REAL,
+  vision_canopy_pct_estimate REAL,
+  canopy_pct_overridden_by_vision BOOLEAN NOT NULL DEFAULT FALSE,
+  house_lot_summary          TEXT,
 
   -- market
   list_price                REAL,

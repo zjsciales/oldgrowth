@@ -9,6 +9,7 @@ from canopy.features import (
     _market_fields,
     _median_year_built_buffer,
     anchor_rollups,
+    compute_canopy_delta,
     compute_feature_vector,
     compute_features_for_listings,
 )
@@ -203,6 +204,53 @@ def test_compute_features_for_listings_persists_and_is_idempotent(session, monke
     assert len(second) == 1
     assert session.query(ListingFeatures).count() == 1
     assert second[0].feature_set_version == FEATURE_SET_VERSION
+
+
+def test_compute_features_for_listings_defaults_effective_canopy_to_raster(session, monkeypatch):
+    _patch_gis(monkeypatch)
+    listing = _listing()
+    parcel = Parcel(listing_id="l1", parcel_id="R001", geometry_geojson=mapping(SQUARE_PARCEL))
+    score = Score(listing_id="l1", canopy_pct=42.0)
+    session.add_all([listing, parcel, score])
+    session.commit()
+
+    [row] = compute_features_for_listings(session, [listing])
+
+    assert row.effective_canopy_pct == 42.0
+    assert row.canopy_pct_overridden_by_vision is False
+
+
+def test_compute_features_for_listings_preserves_vision_override_on_recompute(session, monkeypatch):
+    """A routine Stage 4 recompute (e.g. the daily backlog pass) must not
+    silently undo a high-confidence vision correction by resetting
+    effective_canopy_pct back to the (possibly still-stale) raster
+    value."""
+    _patch_gis(monkeypatch)
+    listing = _listing()
+    parcel = Parcel(listing_id="l1", parcel_id="R001", geometry_geojson=mapping(SQUARE_PARCEL))
+    score = Score(listing_id="l1", canopy_pct=42.0)
+    session.add_all([listing, parcel, score])
+    session.commit()
+
+    compute_features_for_listings(session, [listing])
+    row = session.query(ListingFeatures).filter_by(listing_id="l1").one()
+    row.effective_canopy_pct = 5.0
+    row.canopy_pct_overridden_by_vision = True
+    session.commit()
+
+    [row] = compute_features_for_listings(session, [listing])
+
+    assert row.effective_canopy_pct == 5.0
+    assert row.canopy_pct_overridden_by_vision is True
+
+
+def test_compute_canopy_delta_both_present():
+    assert compute_canopy_delta(70.0, 42.0) == 28.0
+
+
+def test_compute_canopy_delta_missing_either_value_is_none():
+    assert compute_canopy_delta(None, 42.0) is None
+    assert compute_canopy_delta(70.0, None) is None
 
 
 def test_compute_feature_vector_avg_room_sqft(session, monkeypatch):

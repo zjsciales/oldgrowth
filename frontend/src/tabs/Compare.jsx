@@ -1,11 +1,18 @@
 import { BODY, C, DISPLAY } from "../theme.js";
 import { usePair } from "../hooks/usePair.js";
+import { useListingVision } from "../hooks/useVision.js";
 import ParcelPlate from "../components/ParcelPlate.jsx";
 import Bar from "../components/Bar.jsx";
 import DriveRow from "../components/DriveRow.jsx";
+import VisionSummary from "../components/VisionSummary.jsx";
 
 export default function Compare({ rater, anchors }) {
-  const { pair, loading, error, choose } = usePair(rater);
+  const { pair, loading, error, choose, patchListing } = usePair(rater);
+  // Both listings are on screen simultaneously in this view, so both get
+  // vision fetched -- matches the pre-existing behavior of /api/pair
+  // always processing both listings, just deferred until after render.
+  useListingVision(pair?.[0] ?? null, (u) => patchListing(u.id, u));
+  useListingVision(pair?.[1] ?? null, (u) => patchListing(u.id, u));
 
   if (loading) {
     return (
@@ -64,6 +71,9 @@ export default function Compare({ rater, anchors }) {
                 {Object.entries(l.drives).slice(0, 2).map(([label, mins]) => (
                   <DriveRow key={label} label={label} mins={mins} anchor={anchors.find((a) => a.label === label)} />
                 ))}
+              </div>
+              <div className="mt-4">
+                <VisionSummary listing={l} />
               </div>
             </div>
           </button>

@@ -39,9 +39,15 @@ from canopy.rating import excluded_listing_ids, ensure_anchor_times
 logger = logging.getLogger(__name__)
 
 # Real ListingFeatures columns used as numeric model inputs.
+# NOTE: canopy uses effective_canopy_pct, not the raw parcel_canopy_pct --
+# effective_canopy_pct defaults to the raster value but can be corrected
+# by a high-confidence vision read (canopy/vision.py), so it's the more
+# accurate signal of the two. parcel_canopy_pct stays a real column for
+# display/audit but is deliberately excluded here to avoid double-
+# counting the same underlying canopy signal.
 LISTING_FEATURES_NUMERIC_COLUMNS = [
     "lot_acreage", "lot_depth_ft", "lot_width_ft", "protected_perimeter_ratio",
-    "rear_open_distance_ft", "wetland_pct_of_parcel", "parcel_canopy_pct",
+    "rear_open_distance_ft", "wetland_pct_of_parcel", "effective_canopy_pct",
     "neighborhood_canopy_pct", "canopy_delta", "median_year_built_buffer",
     "canopy_age_proxy", "dist_to_arterial_m", "through_traffic_proxy",
     "front_setback_ft", "year_built", "sqft", "beds", "baths", "stories",

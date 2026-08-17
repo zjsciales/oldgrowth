@@ -64,12 +64,25 @@ head`). See `ARCHITECTURE.md` for directory layout.
   go through tag-driven hinge classification per `SCORING_MODEL.md` §4,
   never a hard cutoff.
 - The Claude vision pass (`canopy/vision.py`) is scoped to structural/
-  architecture feature extraction + rationale writeup, run lazily once
-  per listing on first view — not a bulk weekly step, and not the
-  primary geometric/adjacency/canopy determination (that stays
-  rule-based and deterministic). It **never scores, ranks, or votes on
-  preference** — rater judgments (`zach`/`andrea`) are the only training
-  labels for the preference model (`SCORING_MODEL.md` §10).
+  architecture feature extraction + rationale/summary writeup, run
+  lazily once per listing (from a dedicated on-demand endpoint, not
+  `/api/batch`/`/api/pair` — see `ARCHITECTURE.md`) rather than as a bulk
+  weekly step. Geometric/adjacency determination stays rule-based and
+  deterministic, never touched by vision. Canopy is the one deliberate
+  exception: the NLCD raster (`ListingFeatures.parcel_canopy_pct`) can be
+  badly stale (e.g. a lot clear-cut after the raster's 2021 capture date
+  still reads as high-canopy), so vision is asked to compare the
+  satellite/listing-photo image against the raster and, when confident
+  (`canopy/vision.py`'s `CANOPY_OVERRIDE_CONFIDENCE_THRESHOLD`), correct
+  `ListingFeatures.effective_canopy_pct` — the value the ranking model
+  actually trains on (`canopy/model.py`). `parcel_canopy_pct` itself is
+  never mutated, so the raw raster value stays available for display/
+  audit. This is still not the vision pass "scoring, ranking, or voting
+  on preference" in the `SCORING_MODEL.md` §10 sense — rater judgments
+  (`zach`/`andrea`) remain the only training *labels* for the pairwise
+  preference model; vision only corrects one *input feature* the same
+  way a GIS re-query would, it doesn't touch how judgments are turned
+  into weights.
 - **Never average the two raters' judgments into one model.** Fit
   separate pairwise preference models per rater and combine only at
   digest time, as `min(z_a, z_b)` — never a mean (`SCORING_MODEL.md` §5).

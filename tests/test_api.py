@@ -1,3 +1,4 @@
+import datetime as dt
 import json
 
 from canopy.app import app
@@ -26,7 +27,7 @@ def test_location_map_404s_for_listing_with_no_coordinates(monkeypatch, session)
 
 
 def _features(listing_id="l1", **overrides):
-    defaults = dict(listing_id=listing_id, feature_set_version="v1", parcel_canopy_pct=60.0)
+    defaults = dict(listing_id=listing_id, feature_set_version="v1", parcel_canopy_pct=60.0, effective_canopy_pct=60.0)
     defaults.update(overrides)
     return ListingFeatures(**defaults)
 
@@ -162,12 +163,12 @@ def test_batch_card_includes_parcel_outline_and_road_edges(monkeypatch, session)
     assert card["roadEdges"]["s"]["path"] == [[-50, -50], [50, -50]]
 
 
-def test_batch_caps_synchronous_vision_calls(monkeypatch, session):
-    """A batch full of never-viewed listings must not fire a vision call
-    per listing -- that's the exact scenario that blew past gunicorn's
-    worker timeout on the first real Railway load (40 sequential
-    Anthropic calls in one request). All listings still come back as
-    cards; only the first MAX_VISION_CALLS_PER_BATCH trigger vision."""
+def test_batch_never_calls_vision(monkeypatch, session):
+    """/api/batch must be a pure DB read now -- a batch full of
+    never-viewed listings used to fire a vision call per listing (capped
+    at MAX_VISION_CALLS_PER_BATCH), the exact scenario that blew past
+    gunicorn's worker timeout on the first real Railway load. Vision now
+    only runs from the dedicated per-listing endpoint, never from batch."""
     session.add(Rater(id="zach", display_name="Zach"))
     n_listings = 10
     for i in range(n_listings):
@@ -175,21 +176,103 @@ def test_batch_caps_synchronous_vision_calls(monkeypatch, session):
         session.add(_features(f"l{i}"))
     session.commit()
 
-    calls = []
+    def _fail(*args, **kwargs):
+        raise AssertionError("ensure_vision_features must not be called from /api/batch")
+
     monkeypatch.setattr("canopy.api.SessionLocal", lambda: session)
-    monkeypatch.setattr(
-        "canopy.api.ensure_vision_features",
-        lambda session_, listing, features: calls.append(listing.id) or features,
-    )
+    monkeypatch.setattr("canopy.api.ensure_vision_features", _fail)
     client = app.test_client()
 
     resp = client.get(f"/api/batch?rater=zach&n={n_listings}")
 
     assert resp.status_code == 200
-    body = resp.get_json()
-    assert len(body["listings"]) == n_listings
-    from canopy.api import MAX_VISION_CALLS_PER_BATCH
-    assert len(calls) == MAX_VISION_CALLS_PER_BATCH
+    assert len(resp.get_json()["listings"]) == n_listings
+
+
+def test_pair_never_calls_vision(monkeypatch, session):
+    session.add(Rater(id="zach", display_name="Zach"))
+    session.add_all([_listing("l1"), _listing("l2")])
+    session.add_all([_features("l1"), _features("l2")])
+    session.commit()
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("ensure_vision_features must not be called from /api/pair")
+
+    monkeypatch.setattr("canopy.api.SessionLocal", lambda: session)
+    monkeypatch.setattr("canopy.api.ensure_vision_features", _fail)
+    client = app.test_client()
+
+    resp = client.get("/api/pair?rater=zach")
+
+    assert resp.status_code == 200
+
+
+def test_listing_vision_404s_for_unknown_listing(monkeypatch, session):
+    client = _client(monkeypatch, session)
+
+    resp = client.post("/api/listings/nope/vision")
+
+    assert resp.status_code == 404
+
+
+def test_listing_vision_404s_when_no_computed_features(monkeypatch, session):
+    session.add(_listing("l1"))
+    session.commit()
+    client = _client(monkeypatch, session)
+
+    resp = client.post("/api/listings/l1/vision")
+
+    assert resp.status_code == 404
+
+
+def test_listing_vision_happy_path_returns_card_with_vision_fields(monkeypatch, session):
+    session.add(_listing("l1"))
+    session.add(_features("l1"))
+    session.commit()
+
+    def fake_ensure(session_, listing, features):
+        features.house_lot_summary = "A tidy coastal cottage."
+        features.canopy_condition = "consistent_with_raster"
+        features.vision_computed_at = dt.datetime(2026, 1, 1)
+        return features
+
+    monkeypatch.setattr("canopy.api.SessionLocal", lambda: session)
+    monkeypatch.setattr("canopy.api.ensure_vision_features", fake_ensure)
+    client = app.test_client()
+
+    resp = client.post("/api/listings/l1/vision")
+
+    assert resp.status_code == 200
+    card = resp.get_json()["listing"]
+    assert card["houseLotSummary"] == "A tidy coastal cottage."
+    assert card["canopyCondition"] == "consistent_with_raster"
+    assert card["visionComputedAt"] is not None
+
+
+def test_listing_vision_is_idempotent(monkeypatch, session):
+    session.add(_listing("l1"))
+    session.add(_features("l1"))
+    session.commit()
+
+    calls = []
+
+    def fake_ensure(session_, listing, features):
+        if features.vision_computed_at is not None:
+            return features
+        calls.append(listing.id)
+        features.vision_computed_at = dt.datetime(2026, 1, 1)
+        session_.commit()  # real ensure_vision_features commits -- otherwise the
+        # write is lost when the endpoint's `finally: session.close()` runs
+        return features
+
+    monkeypatch.setattr("canopy.api.SessionLocal", lambda: session)
+    monkeypatch.setattr("canopy.api.ensure_vision_features", fake_ensure)
+    client = app.test_client()
+
+    client.post("/api/listings/l1/vision")
+    client.post("/api/listings/l1/vision")
+
+    assert len(calls) == 1
 
 
 def test_pair_returns_two_cards_and_strategy(monkeypatch, session):

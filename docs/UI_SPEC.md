@@ -164,6 +164,7 @@ the one who says no.
 ```
 GET  /api/batch?rater={id}&n=40      → { listings: [ListingCard], batch_id }
 GET  /api/pair?rater={id}            → { listing_a, listing_b, selection_strategy }
+POST /api/listings/{id}/vision       → { listing: ListingCard } — on-demand vision trigger, see below
 POST /api/judgment                   → see below
 POST /api/comparison                 → { rater_id, listing_a, listing_b, winner, ... }
 GET  /api/weights?rater={id}         → coefficients, CIs, thresholds, classification
@@ -205,6 +206,19 @@ sent now is a small, public-record-derived payload (a few hundred bytes
 per listing) — see `ARCHITECTURE.md` Component 4 for the coordinate-frame
 detail.
 
+**Revised (2026-08-17)**: `/api/batch` and `/api/pair` no longer call the
+vision pass synchronously (the old `MAX_VISION_CALLS_PER_BATCH` cap is
+gone) — they're pure DB reads now. The frontend instead calls
+`POST /api/listings/{id}/vision` once, for whichever listing is currently
+on screen, after the card has already rendered from the batch/pair
+response. `ListingCard` gains `parcelCanopyRaster` (raw raster canopy %,
+unadjusted), `canopyOverriddenByVision`, `canopyCondition`,
+`houseLotSummary`, and `visionComputedAt`; `parcelCanopy` now sources
+from `effective_canopy_pct` (raster, corrected by vision when
+confident), not the raw raster value — see `ARCHITECTURE.md`'s Known
+Limitations for the full mechanism. §6 below covers where
+`houseLotSummary` is placed on the page.
+
 ### Schema additions
 
 ```sql
@@ -233,6 +247,15 @@ CREATE TABLE judgment_anchors (
 - **Photo is secondary to the plate.** Satellite and street imagery show
   canopy but not parcel lines or what's buildable next door — precisely the
   information that was missing.
+- **The vision-generated summary/canopy-correction section is the last
+  thing on the page, with no loading skeleton.** It arrives from an async
+  `POST /api/listings/{id}/vision` call fired only after the card has
+  already rendered from cached data (`useListingVision`,
+  `frontend/src/hooks/useVision.js`) — being last in document flow means
+  its arrival a moment later never reflows the plate, photo, or rating
+  buttons a rater is actively looking at. Absent entirely
+  (`VisionSummary` renders `null`) until it resolves, rather than showing
+  a spinner for a non-critical enhancement.
 
 ---
 

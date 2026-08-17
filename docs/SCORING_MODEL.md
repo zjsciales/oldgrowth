@@ -98,7 +98,7 @@ Don't hand-pick `τ_lo` / `τ_hi` — read them off the tag data:
 
 **This is the answer to "what canopy number are we comfortable with."** After
 ~30 tagged rejections you'll have an empirical dealbreaker threshold for
-`parcel_canopy_pct`, and separately a delight threshold — and they'll almost
+`effective_canopy_pct`, and separately a delight threshold — and they'll almost
 certainly differ, which is exactly why one hand-set number failed.
 
 Same mechanism resolves "how old is old growth" via

@@ -6,6 +6,7 @@ import pytest
 
 from canopy.db.models import Listing, ListingFeatures, ModelRun, PreferenceScore, Rater, Tag
 from canopy.model import (
+    NUMERIC_FEATURES,
     bootstrap_ci,
     build_training_pairs,
     classify_features_from_tags,
@@ -300,7 +301,7 @@ def test_fit_model_and_score_listings_end_to_end(session):
     for i in range(n):
         canopy = 10.0 + i * 5  # 10..85, strictly increasing with index
         session.add(_listing(f"l{i}", price=500000))
-        session.add(_features(f"l{i}", parcel_canopy_pct=canopy, price_per_sqft=200.0))
+        session.add(_features(f"l{i}", effective_canopy_pct=canopy, price_per_sqft=200.0))
     session.commit()
 
     # rater strictly prefers higher canopy -- higher index always wins
@@ -314,7 +315,7 @@ def test_fit_model_and_score_listings_end_to_end(session):
     model_run = fit_model(session, "zach")
 
     assert model_run.n_pairs == 40
-    assert model_run.coefficients["parcel_canopy_pct"] > 0
+    assert model_run.coefficients["effective_canopy_pct"] > 0
     assert model_run.holdout_accuracy is not None
     assert model_run.holdout_accuracy > 0.6  # should clearly beat a coin flip
 
@@ -322,9 +323,19 @@ def test_fit_model_and_score_listings_end_to_end(session):
     scores_by_listing = {s.listing_id: s.raw_score for s in scores}
     assert scores_by_listing["l15"] > scores_by_listing["l0"]  # highest canopy scores higher than lowest
 
+
     # idempotent: re-scoring updates in place, not duplicate rows
     score_listings(session, model_run)
     assert session.query(PreferenceScore).filter_by(model_run_id=model_run.id).count() == n
+
+
+def test_numeric_features_trains_on_effective_not_raw_parcel_canopy_pct():
+    """Guards against accidentally re-adding the raw raster column as a
+    training input alongside effective_canopy_pct -- that would double-
+    count the same underlying canopy signal (canopy/model.py's comment on
+    LISTING_FEATURES_NUMERIC_COLUMNS)."""
+    assert "effective_canopy_pct" in NUMERIC_FEATURES
+    assert "parcel_canopy_pct" not in NUMERIC_FEATURES
 
 
 # ---------------------------------------------------------------------------

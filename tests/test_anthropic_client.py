@@ -13,6 +13,10 @@ FAKE_RESULT = {
     "visible_renovation_recency": "recent reno",
     "rationale": "Backs to marsh, 65% canopy.",
     "concerns": "",
+    "canopy_condition": "consistent_with_raster",
+    "canopy_condition_confidence": 0.9,
+    "corrected_canopy_pct_estimate": 65.0,
+    "house_lot_summary": "A coastal contemporary home with mature trees along the back of the lot.",
 }
 
 
@@ -25,8 +29,10 @@ class _TextBlock:
 class _FakeMessages:
     def __init__(self, blocks):
         self._blocks = blocks
+        self.captured_kwargs = None
 
     def create(self, **kwargs):
+        self.captured_kwargs = kwargs
         return type("Response", (), {"content": self._blocks})()
 
 
@@ -61,6 +67,28 @@ def test_extract_structural_features_single_text_block(monkeypatch):
     result = extract_structural_features({}, b"fake-image-bytes")
 
     assert result == FAKE_RESULT
+
+
+def test_extract_structural_features_includes_listing_photo_when_given(monkeypatch):
+    fake_client = _FakeClient([_TextBlock(json.dumps(FAKE_RESULT))])
+    monkeypatch.setattr("canopy.clients.anthropic_client._client", lambda: fake_client)
+
+    extract_structural_features({}, b"satellite-bytes", listing_photo_bytes=b"photo-bytes")
+
+    content = fake_client.messages.captured_kwargs["messages"][0]["content"]
+    image_blocks = [b for b in content if b["type"] == "image"]
+    assert len(image_blocks) == 2
+
+
+def test_extract_structural_features_omits_second_image_when_no_photo(monkeypatch):
+    fake_client = _FakeClient([_TextBlock(json.dumps(FAKE_RESULT))])
+    monkeypatch.setattr("canopy.clients.anthropic_client._client", lambda: fake_client)
+
+    extract_structural_features({}, b"satellite-bytes")
+
+    content = fake_client.messages.captured_kwargs["messages"][0]["content"]
+    image_blocks = [b for b in content if b["type"] == "image"]
+    assert len(image_blocks) == 1
 
 
 def test_client_sets_an_explicit_request_timeout(monkeypatch):

@@ -3,7 +3,18 @@
 import argparse
 import logging
 
-from canopy.db.models import Listing, ListingFeatures, Parcel, Rater
+from canopy.db.models import (
+    Judgment,
+    JudgmentAnchor,
+    JudgmentTag,
+    Listing,
+    ListingFeatures,
+    ModelRun,
+    Parcel,
+    PairwiseComparison,
+    PreferenceScore,
+    Rater,
+)
 from canopy.db.session import SessionLocal
 from canopy.digest import send_digest
 from canopy.email_ingest import ingest_from_email
@@ -248,6 +259,91 @@ def backfill_parcel_geometry() -> None:
         session.close()
 
 
+def recompute_canopy_and_features() -> None:
+    """One-off rollout step for the vision-corrected-canopy change
+    (ListingFeatures.effective_canopy_pct, canopy/vision.py). Rescores
+    every already-featured listing's Score (Stage 3 -- cheap, the NLCD
+    raster is a locally cached file, no per-listing network call) and
+    recomputes its ListingFeatures row (Stage 4), so effective_canopy_pct
+    gets populated via the normal feature-computation code path
+    (canopy/features.py's compute_features_for_listings), rather than a
+    bespoke column-copy script.
+
+    Scoped to listings that already have a ListingFeatures row for the
+    current FEATURE_SET_VERSION -- i.e. listings that have already been
+    through Stage 4 at least once (in practice, zillow_email-sourced
+    candidates; RentCast rows are real historical data but were never
+    GIS-enriched/scored/featured in the first place, per
+    canopy/cli.py::run_rentcast_weekly's docstring, and Stage 4 makes
+    live NHC GIS calls per listing -- there's no reason to newly pay that
+    cost, at real volume, for listings that were never rating candidates).
+
+    Run once, right after the migration adding effective_canopy_pct, and
+    after clearing judgments/pairwise_comparisons/model_runs/
+    preference_scores -- existing rating history predates this feature's
+    semantics (canopy_pct meant something different to the model before),
+    so the model needs a fresh fit against it regardless. See
+    docs/ARCHITECTURE.md's rollout note."""
+    session = SessionLocal()
+    try:
+        featured_ids = {
+            listing_id for (listing_id,) in
+            session.query(ListingFeatures.listing_id).filter(ListingFeatures.feature_set_version == FEATURE_SET_VERSION)
+        }
+        listings = _excluding_hard_no(session.query(Listing).filter(Listing.id.in_(featured_ids)).all())
+        logger.info("rescoring canopy for %d listings", len(listings))
+        score_canopy(session, listings)
+        logger.info("recomputing feature vectors for %d listings", len(listings))
+        compute_features_for_listings(session, listings)
+        logger.info("done")
+    finally:
+        session.close()
+
+
+def reset_rating_history() -> None:
+    """DESTRUCTIVE one-off, meant to run once alongside
+    recompute_canopy_and_features when shipping the vision-corrected-
+    canopy change: deletes every Judgment/JudgmentTag/JudgmentAnchor/
+    PairwiseComparison/ModelRun/PreferenceScore row, and resets every
+    ListingFeatures.vision_computed_at to NULL so the next on-demand view
+    of a listing re-runs vision under the new two-image/canopy-condition
+    schema instead of staying permanently stuck on old-schema output.
+
+    Existing rating history was collected against the old canopy
+    semantics (parcel_canopy_pct straight from the raster, unadjusted by
+    vision) -- current data is confirmed test data with the user, so this
+    clears it for a clean refit rather than trying to reconcile old
+    judgments against the new effective_canopy_pct meaning. Does NOT
+    touch Listing/Parcel/Score/ListingFeatures rows themselves (real
+    ingested/GIS/canopy data, not rating history) other than the
+    vision_computed_at reset. Not wired to any automatic pipeline --
+    intentionally requires a deliberate manual run."""
+    session = SessionLocal()
+    try:
+        for model, label in (
+            (JudgmentTag, "judgment_tags"),
+            (JudgmentAnchor, "judgment_anchors"),
+            (PairwiseComparison, "pairwise_comparisons"),
+            (PreferenceScore, "preference_scores"),
+            (Judgment, "judgments"),
+            (ModelRun, "model_runs"),
+        ):
+            count = session.query(model).delete()
+            logger.info("deleted %d rows from %s", count, label)
+
+        reset = (
+            session.query(ListingFeatures)
+            .filter(ListingFeatures.vision_computed_at.isnot(None))
+            .update({"vision_computed_at": None})
+        )
+        logger.info("reset vision_computed_at for %d listing_features rows", reset)
+
+        session.commit()
+        logger.info("done")
+    finally:
+        session.close()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="canopy")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -270,6 +366,14 @@ def main() -> None:
         "backfill-parcel-geometry",
         help="Recompute features for Zillow listings missing real parcel outline/road-edge geometry",
     )
+    subparsers.add_parser(
+        "recompute-canopy-features",
+        help="Rollout step for vision-corrected canopy: rescore + recompute features for every listing",
+    )
+    subparsers.add_parser(
+        "reset-rating-history",
+        help="DESTRUCTIVE: clears judgments/comparisons/model runs and vision cache, for a clean refit",
+    )
 
     args = parser.parse_args()
     if args.command == "run-daily":
@@ -284,6 +388,10 @@ def main() -> None:
         backfill_rentcast()
     elif args.command == "backfill-parcel-geometry":
         backfill_parcel_geometry()
+    elif args.command == "recompute-canopy-features":
+        recompute_canopy_and_features()
+    elif args.command == "reset-rating-history":
+        reset_rating_history()
 
 
 if __name__ == "__main__":

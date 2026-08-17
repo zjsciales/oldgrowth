@@ -15,8 +15,13 @@ the start."""
 FEATURE_SET_VERSION = "v1"  # must match canopy.features.FEATURE_SET_VERSION
 
 COLD_START_PRIOR = {
-    # canopy -- the whole reason this project exists
-    "parcel_canopy_pct": 0.8,
+    # canopy -- the whole reason this project exists. Keyed as
+    # effective_canopy_pct (not the raw raster parcel_canopy_pct) since
+    # that's what canopy/model.py actually trains on -- see
+    # LISTING_FEATURES_NUMERIC_COLUMNS's comment there. Any feature not
+    # listed here defaults to 0.0 per this module's docstring, so this key
+    # must track whatever model.py currently fits on.
+    "effective_canopy_pct": 0.8,
     "neighborhood_canopy_pct": 0.6,
     "canopy_delta": 0.2,
     "canopy_age_proxy": 0.4,

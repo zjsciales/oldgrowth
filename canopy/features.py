@@ -137,6 +137,17 @@ def _market_fields(listing: Listing) -> dict:
     }
 
 
+def compute_canopy_delta(neighborhood_canopy_pct: float | None, canopy_pct: float | None) -> float | None:
+    """neighborhood - lot. Shared by compute_feature_vector (raw raster
+    parcel_canopy_pct) and canopy/vision.py (effective_canopy_pct, when a
+    high-confidence override fires) -- keeps this real trained numeric
+    input consistent with whichever canopy value is actually in effect
+    for a listing."""
+    if neighborhood_canopy_pct is None or canopy_pct is None:
+        return None
+    return neighborhood_canopy_pct - canopy_pct
+
+
 def _dominant_road_class(edges: dict | None, road_edges: dict | None) -> str | None:
     """Among the sides whose dominant touching category is actually
     "road" (per compute_boundary_features' `edges`), pick the
@@ -197,6 +208,7 @@ def compute_feature_vector(session: Session, listing: Listing, parcel: Parcel | 
     parcel_canopy = score.canopy_pct if score else None
     if parcel_canopy is None:
         imputed.append("parcel_canopy_pct")
+        imputed.append("effective_canopy_pct")
 
     neighborhood_canopy = None
     if parcel_polygon is not None:
@@ -206,10 +218,8 @@ def compute_feature_vector(session: Session, listing: Listing, parcel: Parcel | 
     if neighborhood_canopy is None:
         imputed.append("neighborhood_canopy_pct")
 
-    canopy_delta = None
-    if neighborhood_canopy is not None and parcel_canopy is not None:
-        canopy_delta = neighborhood_canopy - parcel_canopy
-    else:
+    canopy_delta = compute_canopy_delta(neighborhood_canopy, parcel_canopy)
+    if canopy_delta is None:
         imputed.append("canopy_delta")
 
     median_year = _median_year_built_buffer(session, listing)
@@ -333,6 +343,17 @@ def compute_features_for_listings(session: Session, listings: list[Listing]) -> 
             if key in ("listing_id", "feature_set_version"):
                 continue
             setattr(row, key, value)
+
+        # effective_canopy_pct (the real model-input canopy value,
+        # canopy/model.py) isn't part of `vector` -- it's not a
+        # deterministically-recomputed field. It defaults to the raw
+        # raster value on every normal recompute, UNLESS canopy/vision.py
+        # already set a high-confidence override for this row, in which
+        # case a routine feature recompute (e.g. the daily backlog pass)
+        # must not silently clobber it back to the stale raster value.
+        if not row.canopy_pct_overridden_by_vision:
+            row.effective_canopy_pct = row.parcel_canopy_pct
+
         row.computed_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
 
         session.commit()  # per-listing, so a mid-run failure doesn't lose progress

@@ -35,17 +35,6 @@ api_bp = Blueprint("api", __name__, url_prefix="/api")
 
 DEFAULT_EDGES = {"n": "buildable", "e": "buildable", "s": "buildable", "w": "buildable"}
 
-# A batch can contain listings that have never had a vision pass; each one
-# is a synchronous Anthropic + Mapbox round-trip (each individually bounded
-# by its own client timeout -- see anthropic_client.REQUEST_TIMEOUT_SECONDS
-# and mapbox.py's fetch_satellite_image -- but still real wall-clock time
-# on the happy path). Uncapped, a batch full of never-viewed listings (e.g.
-# right after a fresh ingest) can blow past gunicorn's worker timeout and
-# take the worker down. Capping keeps every batch response fast; listings
-# past the cap simply render without vision-derived fields until a later
-# view processes them.
-MAX_VISION_CALLS_PER_BATCH = 3
-
 
 def _features_for(session, listing: Listing) -> ListingFeatures | None:
     return (
@@ -56,9 +45,13 @@ def _features_for(session, listing: Listing) -> ListingFeatures | None:
 
 
 def _try_ensure_vision(session, listing: Listing, features: ListingFeatures) -> None:
-    """Vision is an enhancement (architecture tags + rationale), not a
-    requirement for a listing card to render -- a Mapbox/Anthropic hiccup
-    on one listing shouldn't 500 the whole batch/pair response."""
+    """Vision is an enhancement (architecture tags, canopy correction,
+    summary), not a requirement for a listing card to render -- a Mapbox/
+    Anthropic hiccup on one listing shouldn't fail the request that
+    triggered it. Only called from the dedicated /listings/<id>/vision
+    endpoint now -- /api/batch and /api/pair stay pure DB reads and never
+    call this, so they can never be slowed down or timed out by a vision
+    call (see the endpoint below for why this used to live there)."""
     try:
         ensure_vision_features(session, listing, features)
     except Exception:
@@ -94,7 +87,19 @@ def _listing_card(session, listing: Listing, features: ListingFeatures) -> dict:
         "baths": features.baths,
         "yearBuilt": features.year_built,
         "lotAcres": round(features.lot_acreage, 2) if features.lot_acreage is not None else None,
-        "parcelCanopy": round(features.parcel_canopy_pct) if features.parcel_canopy_pct is not None else None,
+        # Sources from effective_canopy_pct (raster, corrected by a
+        # high-confidence vision read when one fired -- canopy/vision.py),
+        # the same value the ranking model trains on. parcelCanopyRaster
+        # below is always the raw, unadjusted raster number, for display/
+        # audit even when a correction has been applied.
+        "parcelCanopy": round(features.effective_canopy_pct) if features.effective_canopy_pct is not None else None,
+        "parcelCanopyRaster": (
+            round(features.parcel_canopy_pct) if features.parcel_canopy_pct is not None else None
+        ),
+        "canopyOverriddenByVision": features.canopy_pct_overridden_by_vision,
+        "canopyCondition": features.canopy_condition,
+        "houseLotSummary": features.house_lot_summary,
+        "visionComputedAt": features.vision_computed_at.isoformat() if features.vision_computed_at else None,
         "neighborhoodCanopy": (
             round(features.neighborhood_canopy_pct) if features.neighborhood_canopy_pct is not None else None
         ),
@@ -172,17 +177,10 @@ def batch():
     try:
         listings = get_batch(session, rater_id, n=n)
         cards = []
-        vision_calls = 0
         for listing in listings:
             features = _features_for(session, listing)
             if features is None:
                 continue
-            if features.vision_computed_at is None and vision_calls >= MAX_VISION_CALLS_PER_BATCH:
-                cards.append(_listing_card(session, listing, features))
-                continue
-            if features.vision_computed_at is None:
-                vision_calls += 1
-            _try_ensure_vision(session, listing, features)
             cards.append(_listing_card(session, listing, features))
         return jsonify(listings=cards, batch_id=str(uuid.uuid4()))
     finally:
@@ -202,8 +200,6 @@ def pair():
         features_b = _features_for(session, listing_b)
         if features_a is None or features_b is None:
             return jsonify(error="selected listings are missing computed features"), 500
-        _try_ensure_vision(session, listing_a, features_a)
-        _try_ensure_vision(session, listing_b, features_b)
         return jsonify(
             listing_a=_listing_card(session, listing_a, features_a),
             listing_b=_listing_card(session, listing_b, features_b),
@@ -211,6 +207,42 @@ def pair():
         )
     except RatingValidationError as exc:
         return jsonify(error=str(exc)), 400
+    finally:
+        session.close()
+
+
+@api_bp.post("/listings/<listing_id>/vision")
+def listing_vision(listing_id):
+    """On-demand, per-listing vision trigger -- the only remaining vision
+    call site now that /api/batch and /api/pair no longer call it
+    synchronously (see the comment that used to live on
+    MAX_VISION_CALLS_PER_BATCH, removed with that constant). The frontend
+    fires this exactly once, for whichever listing is currently on
+    screen, after the initial card has already rendered from cached DB
+    data -- never prefetched ahead of what a rater is actually looking at
+    (cost discipline, same intent the old per-batch cap existed for)."""
+    session = SessionLocal()
+    try:
+        listing = session.get(Listing, listing_id)
+        if listing is None:
+            return jsonify(error="listing not found"), 404
+        features = (
+            session.query(ListingFeatures)
+            .filter_by(listing_id=listing_id, feature_set_version=FEATURE_SET_VERSION)
+            # Row lock: a second concurrent request for the same listing
+            # (rapid tab switching, a duplicate effect firing) blocks here
+            # until the first vision pass commits, then re-reads
+            # vision_computed_at already set and skips via
+            # ensure_vision_features's own idempotency gate -- without
+            # this, both requests could read it as None before either
+            # writes, firing two Claude+Mapbox calls for one listing.
+            .with_for_update()
+            .one_or_none()
+        )
+        if features is None:
+            return jsonify(error="listing has no computed features"), 404
+        _try_ensure_vision(session, listing, features)
+        return jsonify(listing=_listing_card(session, listing, features))
     finally:
         session.close()
 

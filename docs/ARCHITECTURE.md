@@ -372,14 +372,69 @@ pass never ranks, it only describes and sanity-checks.
 - `median_year_built_buffer` coverage is necessarily partial — only areas
   where we've already ingested listings — since no NHC GIS layer exposes
   year-built (confirmed live against 4 candidate layers).
-- Canopy raster may lag recent clearing by months; the lazy vision pass
-  is the intended mitigation, not a guarantee. A real, historical
-  instance of this: the raster's own zero-fill masking bug (see below)
-  meant canopy % was silently deflated for most non-rectangular parcels
-  until fixed during this pivot — rescoring all 1025 real listings after
-  the fix moved the count clearing a 40% canopy threshold from a much
-  smaller number to 148, which was likely a bigger contributor to the
-  original 1025→2 collapse than the hard-filter design itself.
+- Canopy raster may lag recent clearing by months. As of the
+  `effective_canopy_pct`/`canopy_condition` change (see below), the lazy
+  vision pass is now actually wired to correct for this, not just
+  documented as intended mitigation — but it's still not a guarantee: it
+  only fires per-listing, on demand, when a rater actually views that
+  listing (`POST /api/listings/<id>/vision`), and only overrides the
+  raster when `canopy_condition_confidence` clears
+  `CANOPY_OVERRIDE_CONFIDENCE_THRESHOLD` (`canopy/vision.py`, currently
+  0.75). A listing no rater has viewed yet, or one where the image is too
+  ambiguous to call confidently, still shows the raw raster value. A
+  real, historical instance of the raster-staleness problem generally:
+  the raster's own zero-fill masking bug (see below) meant canopy % was
+  silently deflated for most non-rectangular parcels until fixed during
+  this pivot — rescoring all 1025 real listings after the fix moved the
+  count clearing a 40% canopy threshold from a much smaller number to
+  148, which was likely a bigger contributor to the original 1025→2
+  collapse than the hard-filter design itself.
+- **Vision-corrected canopy** (`ListingFeatures.effective_canopy_pct`,
+  `canopy_condition`, `canopy_condition_confidence`,
+  `vision_canopy_pct_estimate`, `canopy_pct_overridden_by_vision`,
+  `house_lot_summary`): the vision pass (`canopy/vision.py`,
+  `canopy/clients/anthropic_client.py`) now sees both the Mapbox
+  satellite image and, when available, the Zillow listing photo
+  (`Listing.photo_url`) in the same call, and is asked to judge
+  `canopy_condition` (does the image look consistent with the raster's
+  `parcel_canopy_pct`, recently cleared, or regrown?) plus its own
+  `corrected_canopy_pct_estimate`. When confident, that estimate becomes
+  `effective_canopy_pct` — the value `canopy/model.py` actually trains
+  on (`LISTING_FEATURES_NUMERIC_COLUMNS`), not the raw
+  `parcel_canopy_pct`, which stays untouched for display/audit
+  (`ListingCard.parcelCanopyRaster`). `canopy_delta` is recomputed
+  against whichever canopy value is in effect
+  (`canopy/features.py::compute_canopy_delta`), so the feature vector
+  stays internally consistent rather than reintroducing staleness one
+  feature over. The vision pass also now writes `house_lot_summary`, a
+  short rater-facing description distinct from the digest-oriented
+  `Score.subagent_rationale`, surfaced in the rating UI as the very last
+  element on the page (`VisionSummary.jsx`) so its late arrival (an async
+  call fired after the card's initial render, see below) never reflows
+  anything a rater is actively looking at. Shipping this required a
+  one-time reset of existing rating history (`judgments`,
+  `pairwise_comparisons`, `model_runs`, `preference_scores`, via
+  `python -m canopy.cli reset-rating-history`) plus a canopy/feature
+  recompute (`python -m canopy.cli recompute-canopy-features`) — existing
+  judgments predated `effective_canopy_pct`'s semantics, and current
+  rating data was confirmed disposable test data at the time of this
+  change, so a clean refit was simpler and safer than trying to reconcile
+  old judgments against a redefined feature. The recompute is scoped to
+  listings that already have a `ListingFeatures` row (in practice,
+  `zillow_email`-sourced candidates) — RentCast rows were never
+  GIS-enriched/scored/featured in the first place
+  (`run_rentcast_weekly`'s docstring), and Stage 4 makes live NHC GIS
+  calls per listing, so there's no reason to newly pay that cost, at real
+  volume, for listings that were never rating candidates.
+- **Vision moved off the request path entirely.** `/api/batch` and
+  `/api/pair` used to call the vision pass synchronously (capped at 3
+  calls/batch) specifically to avoid Railway's edge/worker timeout on a
+  slow Anthropic/Mapbox round-trip. Both endpoints are now pure DB reads;
+  the frontend instead calls a dedicated `POST /api/listings/<id>/vision`
+  endpoint for exactly the listing currently on screen, after the
+  initial card has already rendered — this removes the timeout risk
+  structurally rather than just capping it, and removes the old "some
+  listings in a batch silently don't get vision this round" behavior.
 - **GIS boundary/footprint queries are slow per listing** (~3-14s,
   several sequential ArcGIS REST calls) — fine for the weekly incremental
   batch, but a full backlog run against ~1000 listings takes multiple

@@ -2,15 +2,18 @@ import { useState } from "react";
 import { BODY, C, DISPLAY } from "../theme.js";
 import { useBatch } from "../hooks/useBatch.js";
 import { useTags } from "../hooks/useTags.js";
+import { useListingVision } from "../hooks/useVision.js";
 import ParcelPlate from "../components/ParcelPlate.jsx";
 import Figure from "../components/Figure.jsx";
 import Bar from "../components/Bar.jsx";
 import DriveRow from "../components/DriveRow.jsx";
 import Card from "../components/Card.jsx";
+import VisionSummary from "../components/VisionSummary.jsx";
 
 export default function Consider({ rater, anchors }) {
-  const { current: listing, remaining, done, loading, judge } = useBatch(rater);
+  const { current: listing, remaining, done, loading, judge, patchListing } = useBatch(rater);
   const { negTags, posTags } = useTags();
+  useListingVision(listing, (updated) => patchListing(updated.id, updated));
 
   const [verdict, setVerdict] = useState(null);
   const [picked, setPicked] = useState([]);
@@ -238,6 +241,8 @@ export default function Consider({ rater, anchors }) {
           </div>
         </Card>
       )}
+
+      <VisionSummary listing={listing} />
     </div>
   );
 }
